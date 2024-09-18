@@ -206,7 +206,7 @@ impl Operation for FrameBuffer {
                 if display_is_busy() == Ok(true) { return Some(false) };
                 in_free(|peripherals| epaper_deep_sleep(peripherals));
                 self.display_state = DisplayState::Idle;
-                Some(false)
+                Some(true)
             },
         }
     }

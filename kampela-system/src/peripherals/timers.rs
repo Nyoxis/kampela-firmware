@@ -10,31 +10,31 @@ pub fn init_timers(peripherals: &mut Peripherals) {
 /// set up TIMER0 for NFC reading
 fn init_timer0(peripherals: &mut Peripherals) {
     peripherals
-        .GPIO_S
-        .timer0_routeen
+        .gpio_s
+        .timer0_routeen()
         .write(|w_reg| w_reg.cc0pen().set_bit());
     peripherals
-        .GPIO_S
-        .timer0_cc0route
-        .write(|w_reg| {
+        .gpio_s
+        .timer0_cc0route()
+        .write(|w_reg| unsafe {
             w_reg
-                .port().variant(0)
-                .pin().variant(NFC_PIN)
+                .port().bits(0)
+                .pin().bits(NFC_PIN)
     });
 
     // synchronizing
-    while peripherals.TIMER0_S.en.read().en().bit_is_set() & peripherals.TIMER0_S.status.read().syncbusy().bit_is_set() {}
+    while peripherals.timer0_s.en().read().en().bit_is_set() & peripherals.timer0_s.status().read().syncbusy().bit_is_set() {}
 
     peripherals
-        .TIMER0_S
-        .en
+        .timer0_s
+        .en()
         .write(|w_reg| w_reg.en().clear_bit());
 
-    while peripherals.TIMER0_S.en.read().disabling().bit_is_set() {}
+    while peripherals.timer0_s.en().read().disabling().bit_is_set() {}
 
     peripherals
-        .TIMER0_S
-        .cc0_cfg
+        .timer0_s
+        .cc0_cfg()
         .write(|w_reg| {
             w_reg
                 .mode().inputcapture()
@@ -44,8 +44,8 @@ fn init_timer0(peripherals: &mut Peripherals) {
     });
     
     peripherals
-        .TIMER0_S
-        .cfg
+        .timer0_s
+        .cfg()
         .write(|w_reg| {
             w_reg
                 .mode().up()
@@ -62,13 +62,13 @@ fn init_timer0(peripherals: &mut Peripherals) {
     });
 
     peripherals
-        .TIMER0_S
-        .en
+        .timer0_s
+        .en()
         .write(|w_reg| w_reg.en().set_bit());
 
     peripherals
-        .TIMER0_S
-        .cc0_ctrl
+        .timer0_s
+        .cc0_ctrl()
         .write(|w_reg| {
             w_reg
                 .icevctrl().falling()
@@ -80,18 +80,18 @@ fn init_timer0(peripherals: &mut Peripherals) {
     });
 
     peripherals
-        .TIMER0_S
-        .cmd
+        .timer0_s
+        .cmd()
         .write(|w_reg| w_reg.stop().set_bit());
 
     peripherals
-        .TIMER0_S
-        .cnt
+        .timer0_s
+        .cnt()
         .reset();
 
     peripherals
-        .TIMER0_S
-        .ctrl
+        .timer0_s
+        .ctrl()
         .write(|w_reg| {
             w_reg
                 .risea().none()

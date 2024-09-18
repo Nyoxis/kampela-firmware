@@ -5,8 +5,8 @@ name = "app"
 version = "0.9.2"
 
 [dependencies]
-cortex-m = { version = "0.7.6", features = ["critical-section-single-core"]}
-cortex-m-rt = "0.7.2"
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"]}
+cortex-m-rt = "0.7.3"
 efm32pg23_fix = {path = "../kampela_experiments_efm32pg23/efm32pg23_fix", features = ["critical-section", "rt"]}
 embedded-alloc = "0.5.0" # embedded-alloc required nightly!
 embedded-graphics = "0.7.1"

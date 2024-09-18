@@ -140,7 +140,7 @@ pub fn turn_nfc_collector_correctly(collector: &mut NfcCollector, nfc_buffer: &[
         buffer_status.pass_read_done().expect("to do");
         if was_write_halted & ! buffer_status.is_write_halted() {
             if let Some(ref mut peripherals) = PERIPHERALS.borrow(cs).borrow_mut().deref_mut() {
-                peripherals.LDMA_S.linkload.write(|w_reg| w_reg.linkload().variant(1 << CH_TIM0));
+                peripherals.ldma_s.linkload().write(|w_reg| unsafe { w_reg.linkload().bits(1 << CH_TIM0) });
             }
             else {panic!("can not borrow peripherals, buffer_status: {:?}, got some new frames", buffer_status)}
         }

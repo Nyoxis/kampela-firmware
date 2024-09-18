@@ -187,48 +187,48 @@ fn flash_read_u32(peripherals: &mut Peripherals) -> u32 {
 
 
 pub fn flash_init(peripherals: &mut Peripherals) {
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
     write_to_usart(peripherals, 0); // for delay
 
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::EnableSoftReset);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
     write_to_usart(peripherals, 0); // for delay
 
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::SoftReset);
 
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
     // TODO: check if it's possible to determine readiness instead of using delay
     delay(10000);
 }
 
 pub fn flash_sleep(peripherals: &mut Peripherals) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::UltraDeepPowerDown);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 pub fn flash_wakeup(peripherals: &mut Peripherals) {
     for _ in 0..2 {
-        select_flash(&mut peripherals.GPIO_S);
+        select_flash(&mut peripherals.gpio_s);
         flash_cmd(peripherals, FlashCommand::ResumeFromPowerDown);
-        deselect_flash(&mut peripherals.GPIO_S);
+        deselect_flash(&mut peripherals.gpio_s);
         // TODO: check if it's possible to determine readiness instead of using delay
         delay(10000);
     }
 }
 
 pub fn flash_unlock(peripherals: &mut Peripherals) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::WriteEnable);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 pub fn flash_lock(peripherals: &mut Peripherals) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::WriteDisable);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 macro_rules! flash_write_addr {
@@ -327,12 +327,12 @@ pub fn flash_read_sr(peripherals: &mut Peripherals) -> [u8;6] {
 
     let mut res = [0u8; 6];
     for i in 0..6 {
-        select_flash(&mut peripherals.GPIO_S);
+        select_flash(&mut peripherals.gpio_s);
         flash_cmd(peripherals, FlashCommand::ReadStatusRegisterAdressed);
         flash_write_some(peripherals, &[i+1 as u8, 0u8]);
         let ind = i as usize;
         flash_read_some(peripherals, &mut res[ind..ind+1]);
-        deselect_flash(&mut peripherals.GPIO_S);
+        deselect_flash(&mut peripherals.gpio_s);
     }
 
     res
@@ -340,42 +340,42 @@ pub fn flash_read_sr(peripherals: &mut Peripherals) -> [u8;6] {
 
 pub fn flash_clear_sr(peripherals: &mut Peripherals) {
     for i in 0..6 {
-        select_flash(&mut peripherals.GPIO_S);
+        select_flash(&mut peripherals.gpio_s);
         flash_cmd(peripherals, FlashCommand::WriteStatusRegisterAdressed);
         flash_write_some(peripherals, &[i+1 as u8, 0u8]);
-        deselect_flash(&mut peripherals.GPIO_S);
+        deselect_flash(&mut peripherals.gpio_s);
     }
 }
 
 
 pub fn flash_wait_ready(peripherals: &mut Peripherals) {
     // while flash_read_status(peripherals, StatusRegister::SR1) & (StatusRegister1::BusyStatus as u8) != 0 {}
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::ActiveStatus);
     flash_write_some(peripherals, &[0_u8, 3]);
     while write_to_usart(peripherals, 0) != 0 {}
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 pub fn flash_erase_page(peripherals: &mut Peripherals, addr: u32) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::ErasePage);
     flash_write_addr!(peripherals, addr);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 
 pub fn flash_write_page(peripherals: &mut Peripherals, addr: u32, data: &[u8]) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::WritePage);
     flash_write_addr!(peripherals, addr);
     let xfer_len = if 256 < data.len() { 256 } else { data.len() };
     flash_write_some(peripherals, &data[0..xfer_len]);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }
 
 pub fn flash_get_size(peripherals: &mut Peripherals) -> u32 {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::ReadDiscoverableParameters);
     let mut jdt_head: [u8; 12] = [0; 12];
     flash_read_some(peripherals, &mut jdt_head);
@@ -384,23 +384,23 @@ pub fn flash_get_size(peripherals: &mut Peripherals) -> u32 {
         write_to_usart(peripherals, 0);
     }
     let res = flash_read_u32(peripherals);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
     (res + 1) >> 13
 }
 
 pub fn flash_get_id(peripherals: &mut Peripherals) -> u32 {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::ReadId);
     let res = flash_read_u32(peripherals);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
     res
 }
 
 pub fn flash_read(peripherals: &mut Peripherals, addr: u32, data: &mut [u8]) {
-    select_flash(&mut peripherals.GPIO_S);
+    select_flash(&mut peripherals.gpio_s);
     flash_cmd(peripherals, FlashCommand::Read);
     flash_write_addr!(peripherals, addr);
     // flash_write_some(peripherals, &[0u8, 0u8, 0u8]);
     flash_read_some(peripherals, data);
-    deselect_flash(&mut peripherals.GPIO_S);
+    deselect_flash(&mut peripherals.gpio_s);
 }

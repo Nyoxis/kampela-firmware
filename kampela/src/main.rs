@@ -73,12 +73,12 @@ unsafe fn HardFault(exception_frame: &ExceptionFrame) -> ! {
 fn LDMA() {
     free(|cs| {
         if let Some(ref mut peripherals) = PERIPHERALS.borrow(cs).borrow_mut().deref_mut() {
-            peripherals.LDMA_S.if_.reset();
+            peripherals.ldma_s.if_().reset();
             let mut buffer_status = BUFFER_STATUS.borrow(cs).borrow_mut();
             match buffer_status.pass_if_done7() {
                 Ok(_) => {
                     if !buffer_status.is_write_halted() {
-                        peripherals.LDMA_S.linkload.write(|w_reg| w_reg.linkload().variant(1 << CH_TIM0));
+                        peripherals.ldma_s.linkload().write(|w_reg| unsafe { w_reg.linkload().bits(1 << CH_TIM0) });
                     }
                 },
                 Err(_) => {}
@@ -128,6 +128,12 @@ fn main() -> ! {
     delay(1000);
 
     free(|cs| {
+        PERIPHERALS.borrow(cs).replace(Some(peripherals));
+    });
+
+    delay(1000);
+    
+    free(|cs| {
         let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
         NVIC::unpend(Interrupt::LDMA);
         NVIC::mask(Interrupt::LDMA);
@@ -135,13 +141,6 @@ fn main() -> ! {
             core_periph.NVIC.set_priority(Interrupt::LDMA, 3);
             NVIC::unmask(Interrupt::LDMA);
         }
-    });
-
-    delay(1000);
-
-
-    free(|cs| {
-        PERIPHERALS.borrow(cs).replace(Some(peripherals));
     });
 
     //let pair_derived = Keypair::from_bytes(ALICE_KAMPELA_KEY).unwrap();
@@ -192,7 +191,7 @@ fn main() -> ! {
                             if i == 1 {
                                 ui.handle_message("Receiving NFC packets...".to_owned());
                             }
-                            while !ui.advance(adc.read()).is_some_and(|c| c == false) {
+                            while ui.advance(adc.read()).is_none() {  //halt nfc receiving untill have enough charge to start update display
                                 adc.advance(());
                             }
                         },
@@ -248,5 +247,4 @@ fn main() -> ! {
         ui.advance(adc.read());
     }
 }
-
 

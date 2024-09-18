@@ -25,46 +25,46 @@ impl From<FreeError> for I2CError {
 
 pub fn init_i2c(peripherals: &mut Peripherals) {
     peripherals
-        .GPIO_S
-        .i2c0_routeen
+        .gpio_s
+        .i2c0_routeen()
         .write(|w_reg| w_reg.sclpen().set_bit().sdapen().set_bit());
     peripherals
-        .GPIO_S
-        .i2c0_sdaroute
-        .write(|w_reg| w_reg.port().variant(0).pin().variant(SDA_PIN));
+        .gpio_s
+        .i2c0_sdaroute()
+        .write(|w_reg| unsafe { w_reg.port().bits(0).pin().bits(SDA_PIN) });
     peripherals
-        .GPIO_S
-        .i2c0_sclroute
-        .write(|w_reg| w_reg.port().variant(0).pin().variant(SCL_PIN));
+        .gpio_s
+        .i2c0_sclroute()
+        .write(|w_reg| unsafe { w_reg.port().bits(0).pin().bits(SCL_PIN) });
     
     peripherals
-        .I2C0_S
-        .ien
+        .i2c0_s
+        .ien()
         .reset();
     peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .reset();
     peripherals
-        .I2C0_S
-        .ctrl
+        .i2c0_s
+        .ctrl()
         .write(|w_reg| w_reg.slave().disable().clhr().standard());
     peripherals
-        .I2C0_S
-        .clkdiv
-        .write(|w_reg| w_reg.div().variant(12)); // divider calculated as 10, set to 12 for debug
+        .i2c0_s
+        .clkdiv()
+        .write(|w_reg| unsafe { w_reg.div().bits(12) }); // divider calculated as 10, set to 12 for debug
     peripherals
-        .I2C0_S
-        .en
+        .i2c0_s
+        .en()
         .write(|w_reg| w_reg.en().enable());
     peripherals
-        .I2C0_S
-        .ctrl
+        .i2c0_s
+        .ctrl()
         .write(|w_reg| w_reg.corerst().enable());
     delay(10000);
     peripherals
-        .I2C0_S
-        .ctrl
+        .i2c0_s
+        .ctrl()
         .write(|w_reg| w_reg.corerst().disable());
     delay(100000);
 }
@@ -77,12 +77,12 @@ pub struct ReadI2C {
 }
 
 pub enum ReadI2CState {
-    /// Initial state; here the read is done
-    Init,
-    /// Handle errata and cleanup after read; output
-    ErrataCleanup1,
-    /// Another operation for errata cleanup, usually not entered; Also outputs.
-    ErrataCleanup2,
+    /// Handle errata and cleanup before read;
+    ErrataCheck,
+    ///here the read is done
+    Read,
+
+    OutputData
 }
 
 impl ReadI2C {
@@ -104,7 +104,7 @@ impl Operation for ReadI2C {
 
     fn new(_: ()) -> Self {
         Self {
-            state: ReadI2CState::Init,
+            state: ReadI2CState::ErrataCheck,
             value: None,
             timer: 0,
         }
@@ -117,97 +117,80 @@ impl Operation for ReadI2C {
 
     fn advance(&mut self, _: ()) -> Self::Output {
         if self.count() { return Ok(None) };
-        match self.state {
-            ReadI2CState::Init => {
-                check_i2c_errors()?;
-                if !if_in_free(|peripherals|
-                    peripherals
-                        .I2C0_S
-                        .if_
-                        .read()
-                        .rxdatav()
-                        .bit_is_clear()
-                )? {
-                    in_free(|peripherals| 
-                        self.value = Some(
-                            peripherals
-                                .I2C0_S
-                                .rxdata
-                                .read()
-                                .rxdata()
-                                .bits()
-                        )
-                    );
-                    self.wind_d(ReadI2CState::ErrataCleanup1);
-                }
-                Ok(None)
-            },
-            ReadI2CState::ErrataCleanup1 => {
+        match &self.state {
+            ReadI2CState::ErrataCheck => {
                 // Errata I2C_E303, patch follows sdk
                 if if_in_free(|peripherals| 
                     peripherals
-                        .I2C0_S
-                        .status
+                        .i2c0_s
+                        .status()
                         .read()
                         .rxdatav()
                         .bit_is_clear() 
                     &
                     peripherals
-                        .I2C0_S
-                        .status
+                        .i2c0_s
+                        .status()
                         .read()
                         .rxfull()
                         .bit_is_set()
                 )? {
                     in_free(|peripherals| {
                         let _dummy_data = peripherals
-                            .I2C0_S
-                            .rxdata
+                            .i2c0_s
+                            .rxdata()
                             .read()
                             .bits();
                         }
                     );
-                    self.wind_d(ReadI2CState::ErrataCleanup2);
-                    Ok(None)
-                } else {
-                    in_free(|peripherals|
+                    in_free(|peripherals| {
                         peripherals
-                            .I2C0_S
-                            .if_
-                            .write(|w_reg| w_reg.rxdatav().clear_bit().rxfull().clear_bit())
-                    );
-
-                    if let Some(out) = self.value {
-                        Ok(Some(out))
-                    } else {
-                        Err(I2CError::SequenceError)
-                    }
+                            .i2c0_s
+                            .if_()
+                            .write(|w_reg| w_reg.rxuf().clear_bit());
+                    });
                 }
+                self.change(ReadI2CState::Read);
+                Ok(None)
             },
-            ReadI2CState::ErrataCleanup2 => {
-                in_free(|peripherals| {
+            ReadI2CState::Read => {
+                check_i2c_errors()?;
+                if if_in_free(|peripherals|
                     peripherals
-                        .I2C0_S
-                        .if_
-                        .write(|w_reg| w_reg.rxuf().clear_bit());
-                    peripherals
-                        .I2C0_S
-                        .if_
-                        .write(|w_reg| 
-                            w_reg
-                                .rxdatav()
-                                .clear_bit()
-                                .rxfull()
-                                .clear_bit()
-                            );
-                });
+                        .i2c0_s
+                        .if_()
+                        .read()
+                        .rxdatav()
+                        .bit_is_set()
+                )? {
+                    in_free(|peripherals| 
+                        self.value = Some(
+                            peripherals
+                                .i2c0_s
+                                .rxdata()
+                                .read()
+                                .rxdata()
+                                .bits()
+                        )
+                    );
+                    self.wind_d(ReadI2CState::OutputData);
+                }
+                Ok(None)
+            },
 
+            ReadI2CState::OutputData => {
+                in_free(|peripherals|
+                    peripherals
+                        .i2c0_s
+                        .if_()
+                        .write(|w_reg| w_reg.rxdatav().clear_bit().rxfull().clear_bit())
+                );
                 if let Some(out) = self.value {
                     Ok(Some(out))
                 } else {
                     Err(I2CError::SequenceError)
                 }
-            },
+            }
         }
     }
 }
@@ -242,15 +225,15 @@ pub fn acknowledge_i2c_tx() -> Result<(), I2CError> {
 pub fn mstop_i2c_wait_and_clear() -> Result<(), I2CError> {
     let mut out = Ok(());
     in_free(|peripherals| {
-        out = check_i2c_errors_free(peripherals)
+        out = mstop_i2c_wait_and_clear_free(peripherals)
     });
     out
 }
 
 pub fn check_i2c_errors_free(peripherals: &mut Peripherals) -> Result<(), I2CError> {
     let if_read = peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .read();
     if if_read.arblost().bit_is_set() {return Err(I2CError::ArbitrationLost)}
     if if_read.buserr().bit_is_set() {return Err(I2CError::BusError)}
@@ -260,8 +243,8 @@ pub fn check_i2c_errors_free(peripherals: &mut Peripherals) -> Result<(), I2CErr
 pub fn acknowledge_i2c_tx_free(peripherals: &mut Peripherals) -> Result<(), I2CError> {
     check_i2c_errors_free(peripherals)?;
     while peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .read()
         .ack()
         .bit_is_clear()
@@ -269,21 +252,21 @@ pub fn acknowledge_i2c_tx_free(peripherals: &mut Peripherals) -> Result<(), I2CE
         check_i2c_errors_free(peripherals)?;
 
         if peripherals
-            .I2C0_S
-            .if_
+            .i2c0_s
+            .if_()
             .read()
             .nack()
             .bit_is_set()
         {
             // clear interrupt flag
             peripherals
-                .I2C0_S
-                .if_
+                .i2c0_s
+                .if_()
                 .write(|w_reg| w_reg.nack().clear_bit());
             // stop
             peripherals
-                .I2C0_S
-                .cmd
+                .i2c0_s
+                .cmd()
                 .write(|w_reg| w_reg.stop().set_bit());
             delay(100000);
             return Err(I2CError::TransferNack)
@@ -291,8 +274,8 @@ pub fn acknowledge_i2c_tx_free(peripherals: &mut Peripherals) -> Result<(), I2CE
     }
     // clear interrupt flag
     peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .write(|w_reg| w_reg.ack().clear_bit());
 
     Ok(())
@@ -301,8 +284,8 @@ pub fn acknowledge_i2c_tx_free(peripherals: &mut Peripherals) -> Result<(), I2CE
 pub fn mstop_i2c_wait_and_clear_free(peripherals: &mut Peripherals) -> Result<(), I2CError> {
     check_i2c_errors_free(peripherals)?;
     while peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .read()
         .mstop()
         .bit_is_clear()
@@ -310,8 +293,8 @@ pub fn mstop_i2c_wait_and_clear_free(peripherals: &mut Peripherals) -> Result<()
         check_i2c_errors_free(peripherals)?;
     }
     peripherals
-        .I2C0_S
-        .if_
+        .i2c0_s
+        .if_()
         .write(|w_reg| w_reg.mstop().clear_bit());
     Ok(())
 }

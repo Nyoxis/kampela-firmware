@@ -31,71 +31,71 @@ pub struct NfcXferBlock {
 pub fn init_ldma(peripherals: &mut Peripherals, nfc_descriptor_address: *const NfcXferBlock) {
     // set up ldma
     peripherals
-        .LDMA_S
-        .en
+        .ldma_s
+        .en()
         .write(|w_reg| {
             w_reg
                 .en().set_bit()
     });
 
     peripherals
-        .LDMA_S
-        .ctrl
-        .write(|w_reg| {
+        .ldma_s
+        .ctrl()
+        .write(|w_reg| unsafe {
             w_reg
-                .numfixed().variant(0)
+                .numfixed().bits(0)
     });
 
     peripherals
-        .LDMA_S
-        .synchwen
-        .write(|w_reg| {
+        .ldma_s
+        .synchwen()
+        .write(|w_reg| unsafe {
             w_reg
-                .syncseten().variant(0)
-                .syncclren().variant(0)
+                .syncseten().bits(0)
+                .syncclren().bits(0)
     });
 
     peripherals
-        .LDMA_S
-        .chdis
-        .write(|w_reg| {
+        .ldma_s
+        .chdis()
+        .write(|w_reg| unsafe {
             w_reg
-                .chdis().variant(0xFF)
+                .chdis().bits(0xFF)
     });
 
     peripherals
-        .LDMA_S
-        .dbghalt
-        .write(|w_reg| {
+        .ldma_s
+        .dbghalt()
+        .write(|w_reg| unsafe {
             w_reg
-                .dbghalt().variant(0)
+                .dbghalt().bits(0)
     });
     
     peripherals
-        .LDMA_S
-        .reqdis
-        .write(|w_reg| {
+        .ldma_s
+        .reqdis()
+        .write(|w_reg| unsafe {
             w_reg
-                .reqdis().variant(0)
+                .reqdis().bits(0)
     });
 
     peripherals
-        .LDMA_S
-        .ien
+        .ldma_s
+        .ien()
         .write(|w_reg| {
             w_reg
                 .error().set_bit()
     });
 
     peripherals
-        .LDMA_S
-        .if_
+        .ldma_s
+        .if_()
         .reset();
 
     // start ldma transfer
     peripherals
-        .LDMA_S
-        .if_
+        .ldma_s
+        .if_()
         .modify(|_, w_reg| {
             w_reg
                 .done7().clear_bit()
@@ -103,27 +103,27 @@ pub fn init_ldma(peripherals: &mut Peripherals, nfc_descriptor_address: *const N
     );
 
     peripherals
-        .LDMAXBAR_S
-        .ch7_reqsel
-        .write(|w_reg| {
+        .ldmaxbar_s
+        .ch7_reqsel()
+        .write(|w_reg| unsafe {
             w_reg
-                .sigsel().variant(0) // _LDMAXBAR_CH_REQSEL_SIGSEL_TIMER0CC0
-                .sourcesel().variant(2) // _LDMAXBAR_CH_REQSEL_SOURCESEL_TIMER0
+                .sigsel().bits(0) // _LDMAXBAR_CH_REQSEL_SIGSEL_TIMER0CC0
+                .sourcesel().bits(2) // _LDMAXBAR_CH_REQSEL_SOURCESEL_TIMER0
         }
     );
 
     peripherals
-        .LDMA_S
-        .ch7_loop
-        .write(|w_reg| {
+        .ldma_s
+        .ch7_loop()
+        .write(|w_reg| unsafe {
             w_reg
-                .loopcnt().variant(0)
+                .loopcnt().bits(0)
         }
     );
 
     peripherals
-        .LDMA_S
-        .ch7_cfg
+        .ldma_s
+        .ch7_cfg()
         .write(|w_reg| {
             w_reg
                 .arbslots().one()
@@ -133,34 +133,36 @@ pub fn init_ldma(peripherals: &mut Peripherals, nfc_descriptor_address: *const N
     );
     
     peripherals
-        .LDMA_S
-        .ch7_link
+        .ldma_s
+        .ch7_link()
         .write(|w_reg| {
             w_reg
-                .link().clear_bit()
-                .linkaddr().variant(nfc_descriptor_address as u32 >> 2)
+                .link().clear_bit();
+            unsafe {
+                w_reg.linkaddr().bits(nfc_descriptor_address as u32 >> 2)
+            }
         }
     );
 
     // there starts a critical section
     free(|_cs| {
         peripherals
-            .LDMA_S
-            .ien
-            .write(|w_reg| {
+            .ldma_s
+            .ien()
+            .write(|w_reg| unsafe {
                 w_reg
-                    .chdone().variant(1 << CH_TIM0)
+                    .chdone().bits(1 << CH_TIM0)
             }
         );
 
         peripherals
-            .LDMA_S
-            .synchwen
+            .ldma_s
+            .synchwen()
             .reset(); // default values, i.e. 0 for clr_off, clr_on, set_off, set_on
 
         peripherals
-            .LDMA_S
-            .chdone
+            .ldma_s
+            .chdone()
             .write(|w_reg| {
                 w_reg
                     .chdone7().clear_bit()
@@ -168,11 +170,11 @@ pub fn init_ldma(peripherals: &mut Peripherals, nfc_descriptor_address: *const N
         );
 
         peripherals
-            .LDMA_S
-            .linkload
-            .write(|w_reg| {
+            .ldma_s
+            .linkload()
+            .write(|w_reg| unsafe {
                 w_reg
-                    .linkload().variant(1 << CH_TIM0)
+                    .linkload().bits(1 << CH_TIM0)
             }
         );
     });

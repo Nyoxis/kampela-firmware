@@ -1,4 +1,4 @@
-use efm32pg23_fix::{GPIO_S, Peripherals};
+use efm32pg23_fix::{GpioS, Peripherals};
 use cortex_m::asm::delay;
 
 use crate::peripherals::usart::*;
@@ -12,14 +12,14 @@ const X_ADDRESS_WIDTH: usize = (SCREEN_SIZE_Y / 8) as usize;
 
 /// BUSY is on port B, pin [`SPI_BUSY_PIN`].
 pub fn display_is_busy() -> Result<bool, FreeError> {
-    if_in_free(|peripherals| spi_is_busy(&mut peripherals.GPIO_S))
+    if_in_free(|peripherals| spi_is_busy(&mut peripherals.gpio_s))
 }
 
 /// BUSY is on port B, pin [`SPI_BUSY_PIN`].
 ///
 /// Blocking variant to be called from critical section (init, panic)
 pub fn display_is_busy_cs(peripherals: &mut Peripherals) -> bool {
-    spi_is_busy(&mut peripherals.GPIO_S)
+    spi_is_busy(&mut peripherals.gpio_s)
 }
 
 /// Send EPD to low power state; should be performed when screen is not drawing at all times to
@@ -34,7 +34,7 @@ pub fn epaper_deep_sleep(peripherals: &mut Peripherals) {
 ///
 /// used within critical section
 pub fn epaper_hw_init_cs(peripherals: &mut Peripherals) {
-    epaper_reset(&mut peripherals.GPIO_S);
+    epaper_reset(&mut peripherals.gpio_s);
     while display_is_busy_cs(peripherals) {}
     epaper_write_command(peripherals, &[0x12]);
     delay(10000);
@@ -46,7 +46,7 @@ pub fn epaper_hw_init_cs(peripherals: &mut Peripherals) {
 /// for critical section
 ///
 /// Why these specific numbers for delays?
-pub fn epaper_reset(gpio: &mut GPIO_S) {
+pub fn epaper_reset(gpio: &mut GpioS) {
     delay(1000);
     display_res_clear(gpio);
     delay(5000);
@@ -64,28 +64,28 @@ pub fn epaper_reset(gpio: &mut GPIO_S) {
 pub fn epaper_write_command(peripherals: &mut Peripherals, command_set: &[u8]) {
     // CS clear corresponds to selected chip, see epaper docs
 
-    deselect_display(&mut peripherals.GPIO_S);
-    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
+    deselect_display(&mut peripherals.gpio_s);
+    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
     
-    display_select_command(&mut peripherals.GPIO_S);
+    display_select_command(&mut peripherals.gpio_s);
     for command in command_set.iter() {
         write_to_usart(peripherals, *command);
     }
-    deselect_display(&mut peripherals.GPIO_S);
+    deselect_display(&mut peripherals.gpio_s);
 }
 
 /// Send data to EPD
 ///
 /// for critical section
 pub fn epaper_write_data(peripherals: &mut Peripherals, data_set: &[u8]) {
-    deselect_display(&mut peripherals.GPIO_S);
-    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
+    deselect_display(&mut peripherals.gpio_s);
+    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
 
-    display_select_data(&mut peripherals.GPIO_S);
+    display_select_data(&mut peripherals.gpio_s);
     for data in data_set.iter() {
         write_to_usart(peripherals, *data);
     }
-    deselect_display(&mut peripherals.GPIO_S);
+    deselect_display(&mut peripherals.gpio_s);
     //    display_data_command_clear(peripherals);
 }
 
@@ -124,18 +124,18 @@ impl <const C: u8> Operation for EPDCommand<C> {
         match self.state {
             EPDByteState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
-                    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
-                    display_select_command(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
+                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    display_select_command(&mut peripherals.gpio_s);
                 });
                 if if_in_free(|peripherals|
-                    peripherals.USART0_S.status.read().txbl().bit_is_clear()
+                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
                 ) == Ok(false) {
                     in_free(|peripherals|
                         peripherals
-                            .USART0_S
-                            .txdata
-                            .write(|w_reg| w_reg.txdata().variant(C))
+                            .usart0_s
+                            .txdata()
+                            .write(|w_reg| unsafe { w_reg.txdata().bits(C) })
                             );
                     self.change(EPDByteState::Aftermath);
                 }
@@ -144,8 +144,8 @@ impl <const C: u8> Operation for EPDCommand<C> {
             EPDByteState::Aftermath => {
                 if if_in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .status
+                        .usart0_s
+                        .status()
                         .read()
                         .txc()
                         .bit_is_set()
@@ -154,12 +154,12 @@ impl <const C: u8> Operation for EPDCommand<C> {
                 } else {
                     in_free(|peripherals| {
                         peripherals
-                            .USART0_S
-                            .rxdata
+                            .usart0_s
+                            .rxdata()
                             .read()
                             .rxdata()
                             .bits();
-                        deselect_display(&mut peripherals.GPIO_S);
+                        deselect_display(&mut peripherals.gpio_s);
                     });
                     true
                 }
@@ -198,18 +198,18 @@ impl <const B: u8> Operation for EPDDataB<B> {
         match self.state {
             EPDByteState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
-                    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
-                    display_select_data(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
+                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    display_select_data(&mut peripherals.gpio_s);
                 });
                 if if_in_free(|peripherals|
-                    peripherals.USART0_S.status.read().txbl().bit_is_clear()
+                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
                 ) == Ok(false) {
                     in_free(|peripherals|
                         peripherals
-                            .USART0_S
-                            .txdata
-                            .write(|w_reg| w_reg.txdata().variant(B))
+                            .usart0_s
+                            .txdata()
+                            .write(|w_reg| unsafe { w_reg.txdata().bits(B) })
                             );
                     self.change(EPDByteState::Aftermath);
                 }
@@ -218,8 +218,8 @@ impl <const B: u8> Operation for EPDDataB<B> {
             EPDByteState::Aftermath => {
                 if if_in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .status
+                        .usart0_s
+                        .status()
                         .read()
                         .txc()
                         .bit_is_set()
@@ -228,12 +228,12 @@ impl <const B: u8> Operation for EPDDataB<B> {
                 } else {
                     in_free(|peripherals| {
                         peripherals
-                            .USART0_S
-                            .rxdata
+                            .usart0_s
+                            .rxdata()
                             .read()
                             .rxdata()
                             .bits();
-                        deselect_display(&mut peripherals.GPIO_S);
+                        deselect_display(&mut peripherals.gpio_s);
                     });
                     true
                 }
@@ -281,12 +281,12 @@ impl <const LEN: usize> Operation for EPDData<LEN> {
         match self.state {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
-                    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
-                    display_select_data(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
+                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    display_select_data(&mut peripherals.gpio_s);
                 });
                 if if_in_free(|peripherals|
-                    peripherals.USART0_S.status.read().txbl().bit_is_clear()
+                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
                 ) == Ok(false) {
                     self.change(EPDDataState::Send);
                 }
@@ -295,9 +295,9 @@ impl <const LEN: usize> Operation for EPDData<LEN> {
             EPDDataState::Send => {
                 in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .txdata
-                        .write(|w_reg| w_reg.txdata().variant(data[self.position]))
+                        .usart0_s
+                        .txdata()
+                        .write(|w_reg| unsafe { w_reg.txdata().bits(data[self.position]) })
                 );
                 self.change(EPDDataState::WaitSend);
                 false
@@ -305,16 +305,16 @@ impl <const LEN: usize> Operation for EPDData<LEN> {
             EPDDataState::WaitSend => {
                 if if_in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .status
+                        .usart0_s
+                        .status()
                         .read()
                         .txc()
                         .bit_is_set()
                 ) == Ok(true) {
                     in_free(|peripherals| {
                         peripherals
-                            .USART0_S
-                            .rxdata
+                            .usart0_s
+                            .rxdata()
                             .read()
                             .rxdata()
                             .bits();
@@ -330,7 +330,7 @@ impl <const LEN: usize> Operation for EPDData<LEN> {
             },
             EPDDataState::Aftermath => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
                 });
                 true
             },
@@ -377,12 +377,12 @@ impl <const LEN: usize> Operation for EPDDataPart<LEN> {
         match self.state {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
-                    select_display(&mut peripherals.GPIO_S); // not necessary if state is known and default at start
-                    display_select_data(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
+                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    display_select_data(&mut peripherals.gpio_s);
                 });
                 if if_in_free(|peripherals|
-                    peripherals.USART0_S.status.read().txbl().bit_is_clear()
+                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
                 ) == Ok(false) {
                     self.change(EPDDataState::Send);
                 }
@@ -391,9 +391,9 @@ impl <const LEN: usize> Operation for EPDDataPart<LEN> {
             EPDDataState::Send => {
                 in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .txdata
-                        .write(|w_reg| w_reg.txdata().variant(data[self.position]))
+                        .usart0_s
+                        .txdata()
+                        .write(|w_reg| unsafe { w_reg.txdata().bits(data[self.position]) })
                 );
                 self.change(EPDDataState::WaitSend);
                 false
@@ -401,16 +401,16 @@ impl <const LEN: usize> Operation for EPDDataPart<LEN> {
             EPDDataState::WaitSend => {
                 if if_in_free(|peripherals|
                     peripherals
-                        .USART0_S
-                        .status
+                        .usart0_s
+                        .status()
                         .read()
                         .txc()
                         .bit_is_set()
                 ) == Ok(true) {
                     in_free(|peripherals| {
                         peripherals
-                            .USART0_S
-                            .rxdata
+                            .usart0_s
+                            .rxdata()
                             .read()
                             .rxdata()
                             .bits();
@@ -433,7 +433,7 @@ impl <const LEN: usize> Operation for EPDDataPart<LEN> {
             },
             EPDDataState::Aftermath => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.GPIO_S);
+                    deselect_display(&mut peripherals.gpio_s);
                 });
                 true
             },

@@ -7,8 +7,8 @@ use crate::in_free;
 pub fn request_adc_measure() {
     in_free(|peripherals|
         peripherals
-            .IADC0_S
-            .cmd
+            .iadc0_s
+            .cmd()
             .write(|w_reg| w_reg.singlestart().set_bit())
     );
 }
@@ -17,7 +17,7 @@ pub fn request_adc_measure() {
 pub fn read_adc() -> i32 {
     let mut value = 0;
     in_free(|peripherals|
-        value = peripherals.IADC0_S.singledata.read().data().bits() & 0x00FFFFFF
+        value = peripherals.iadc0_s.singledata().read().data().bits() & 0x00FFFFFF
     );
     (if value & 0x00800000 == 0 {
         value
@@ -28,8 +28,8 @@ pub fn read_adc() -> i32 {
 
 pub fn read_int_flag(peripherals: &mut Peripherals) -> bool {
     peripherals
-        .IADC0_S
-        .if_
+        .iadc0_s
+        .if_()
         .read()
         .singledone()
         .bit()
@@ -38,8 +38,8 @@ pub fn read_int_flag(peripherals: &mut Peripherals) -> bool {
 pub fn reset_int_flags() {
     in_free(|peripherals|
         peripherals
-            .IADC0_S
-            .if_
+            .iadc0_s
+            .if_()
             .reset()
     );
 }
@@ -53,34 +53,35 @@ pub fn init_adc(peripherals: &mut Peripherals) {
 
     //CMU clockselectset
     peripherals
-        .CMU_S
-        .iadcclkctrl
+        .cmu_s
+        .iadcclkctrl()
         .write(|w_reg| w_reg.clksel().fsrco());
 
     disable_adc(peripherals);
 
     // actually init
     peripherals
-        .IADC0_S
-        .ctrl
+        .iadc0_s
+        .ctrl()
         .write(|w_reg| {
             w_reg
                 .adcclksuspend0().prswudis()
                 .adcclksuspend1().prswudis()
                 .dbghalt().normal()
                 .warmupmode().keepwarm()
-                .timebase().variant(18)
-                .hsclkrate().div1()
+                .hsclkrate().div1();
+            unsafe {
+                w_reg.timebase().bits(18)
+            }
         });
+    peripherals
+        .iadc0_s
+        .timer()
+        .write(|w_reg| unsafe { w_reg.timer().bits(0) });
 
     peripherals
-        .IADC0_S
-        .timer
-        .write(|w_reg| w_reg.timer().variant(0));
-
-    peripherals
-        .IADC0_S
-        .cmpthr
+        .iadc0_s
+        .cmpthr()
         .reset();
 
     cfg0_set(peripherals);
@@ -95,14 +96,14 @@ pub fn init_adc(peripherals: &mut Peripherals) {
 
     // set gpio
     peripherals
-        .GPIO_S
-        .abusalloc
+        .gpio_s
+        .abusalloc()
         .write(|w_reg| w_reg.aeven0().adc0());
 
     //enable interrupts
     peripherals
-        .IADC0_S
-        .ien
+        .iadc0_s
+        .ien()
         .write(|w_reg| {
             w_reg
                 .singledone().set_bit()
@@ -115,8 +116,8 @@ pub fn init_adc(peripherals: &mut Peripherals) {
     // This allows debugger to stay connected while Kampela sleeps in EM2 and waits for power to
     // replenish
     peripherals
-        .EMU_S
-        .ctrl
+        .emu_s
+        .ctrl()
         .write(|w_reg| w_reg.em2dbgen().set_bit());
 }
 
@@ -138,20 +139,20 @@ impl CalibrationData {
         //
         // things are complicated...
         let ui_gain = peripherals
-            .DEVINFO
-            .iadc0gain0
+            .devinfo
+            .iadc0gain0()
             .read()
             .gaincana1()
             .bits();
         let offset1 = peripherals
-            .DEVINFO
-            .iadc0normaloffsetcal1
+            .devinfo
+            .iadc0normaloffsetcal1()
             .read()
             .offsetana3norm()
             .bits() as i16; // C reference did this
         let offset0 = peripherals
-            .DEVINFO
-            .iadc0normaloffsetcal0
+            .devinfo
+            .iadc0normaloffsetcal0()
             .read()
             .bits() as i16; // C reference did this
 
@@ -183,13 +184,12 @@ impl CalibrationData {
 /// Set up cfg0 for ADC.
 fn cfg0_set(peripherals: &mut Peripherals) {
     peripherals
-        .IADC0_S
-        .cfg0
+        .iadc0_s
+        .cfg0()
         .write(|w_reg| {
             w_reg
                 .adcmode().normal()
                 .osrhs().hispd32()
-                .osrha().hiacc92()
                 .analoggain().anagain0p5()
                 .refsel().vbgr()
                 .digavg().avg16()
@@ -199,54 +199,56 @@ fn cfg0_set(peripherals: &mut Peripherals) {
     let calibrations = CalibrationData::new(peripherals, 16);
 
     peripherals
-        .IADC0_S
-        .scale0
+        .iadc0_s
+        .scale0()
         .write(|w_reg| {
-            let prefab = w_reg
-            .offset().variant(calibrations.offset_truncated)
-            .gain13lsb().variant(calibrations.ui_gain_value)
-            .gain3msb();
+            unsafe {
+                w_reg
+                    .offset().bits(calibrations.offset_truncated)
+                    .gain13lsb().bits(calibrations.ui_gain_value);
+            }
+            let prefab = w_reg.gain3msb();
             if calibrations.ui_gain_sign {
                 prefab.gain100()
             } else {
                 prefab.gain011()
             }
         });
-
     peripherals
-        .IADC0_S
-        .sched0
-        .write(|w_reg| w_reg.prescale().variant(1));
+        .iadc0_s
+        .sched0()
+        .write(|w_reg| unsafe { w_reg.prescale().bits(1) });
 }
 
 /// Set up cfg1 for ADC. Not sure it is even used.
 fn cfg1_set(peripherals: &mut Peripherals) {
     peripherals
-        .IADC0_S
-        .cfg1
+        .iadc0_s
+        .cfg1()
         .reset();
 
     let calibrations = CalibrationData::new(peripherals, 4);
 
     peripherals
-        .IADC0_S
-        .scale1
+        .iadc0_s
+        .scale1()
         .write(|w_reg| {
-            let prefab = w_reg
-            .offset().variant(calibrations.offset_truncated)
-            .gain13lsb().variant(calibrations.ui_gain_value)
-            .gain3msb();
+            unsafe {
+                w_reg
+                    .offset().bits(calibrations.offset_truncated)
+                    .gain13lsb().bits(calibrations.ui_gain_value);
+            }
+            let prefab = w_reg.gain3msb();
             if calibrations.ui_gain_sign {
                 prefab.gain100()
             } else {
                 prefab.gain011()
             }
         });
-
     peripherals
-        .IADC0_S
-        .sched1
-        .write(|w_reg| w_reg.prescale().variant(1));
+        .iadc0_s
+        .sched1()
+        .write(|w_reg| unsafe { w_reg.prescale().bits(1)});
 }
 
 /// Initialize single ADC read config
@@ -254,8 +256,8 @@ fn init_adc_single_reader(peripherals: &mut Peripherals) {
     disable_adc(peripherals);
     
     peripherals
-        .IADC0_S
-        .singlefifocfg
+        .iadc0_s
+        .singlefifocfg()
         .write(|w_reg| {
             w_reg
                 .alignment().right20()
@@ -265,8 +267,8 @@ fn init_adc_single_reader(peripherals: &mut Peripherals) {
         });
     
     peripherals
-        .IADC0_S
-        .trigger
+        .iadc0_s
+        .trigger()
         .modify(|_, w_reg| {
             w_reg
                 .singletrigsel().immediate()
@@ -278,15 +280,17 @@ fn init_adc_single_reader(peripherals: &mut Peripherals) {
 
     // measure between GND and PA0
     peripherals
-        .IADC0_S
-        .single
+        .iadc0_s
+        .single()
         .write(|w_reg| {
             w_reg
                 .portneg().gnd()
-                .pinpos().variant(0)
                 .portpos().porta()
                 .cfg().config0()
-                .cmp().clear_bit()
+                .cmp().clear_bit();
+            unsafe {
+                w_reg.pinpos().bits(0)
+            }
         });
 
     disable_adc(peripherals);
@@ -295,8 +299,8 @@ fn init_adc_single_reader(peripherals: &mut Peripherals) {
 /// Enable ADC
 fn enable_adc(peripherals: &mut Peripherals) {
         peripherals
-        .IADC0_S
-        .en
+        .iadc0_s
+        .en()
         .write(|w_reg| w_reg.en().enable());
 }
 
@@ -304,21 +308,21 @@ fn enable_adc(peripherals: &mut Peripherals) {
 fn disable_adc(peripherals: &mut Peripherals) {
     while 
         peripherals
-            .IADC0_S
-            .status
+            .iadc0_s
+            .status()
             .read()
             .syncbusy()
             .bit_is_set()
     {}
     peripherals
-        .IADC0_S
-        .en
+        .iadc0_s
+        .en()
         .write(|w_reg| w_reg.en().disable());
 
     while
         peripherals
-            .IADC0_S
-            .en
+            .iadc0_s
+            .en()
             .read()
             .disabling()
             .bit_is_set()
@@ -329,8 +333,8 @@ fn disable_adc(peripherals: &mut Peripherals) {
 fn reset_adc(peripherals: &mut Peripherals) {
     enable_adc(peripherals);
     peripherals
-        .IADC0_S
-        .cmd
+        .iadc0_s
+        .cmd()
         .write(|w_reg| {
             w_reg
                 .singlestop().set_bit()
@@ -338,177 +342,177 @@ fn reset_adc(peripherals: &mut Peripherals) {
                 .timerdis().set_bit()
         });
     while
-        peripherals.IADC0_S.status.read().singlequeuepending().bit_is_set() |
-        peripherals.IADC0_S.status.read().scanqueuepending().bit_is_set() |
-        peripherals.IADC0_S.status.read().converting().bit_is_set() |
-        peripherals.IADC0_S.status.read().timeractive().bit_is_set() 
+        peripherals.iadc0_s.status().read().singlequeuepending().bit_is_set() |
+        peripherals.iadc0_s.status().read().scanqueuepending().bit_is_set() |
+        peripherals.iadc0_s.status().read().converting().bit_is_set() |
+        peripherals.iadc0_s.status().read().timeractive().bit_is_set() 
     {}
     peripherals
-        .IADC0_S
-        .maskreq
+        .iadc0_s
+        .maskreq()
         .reset();
     peripherals
-        .IADC0_S
-        .single
+        .iadc0_s
+        .single()
         .reset();
     while
-        peripherals.IADC0_S.status.read().singlewritepending().bit_is_set() |
-        peripherals.IADC0_S.status.read().maskreqwritepending().bit_is_set()
+        peripherals.iadc0_s.status().read().singlewritepending().bit_is_set() |
+        peripherals.iadc0_s.status().read().maskreqwritepending().bit_is_set()
         {}
     while
-        peripherals.IADC0_S.status.read().singlefifodv().bit_is_set() |
-        peripherals.IADC0_S.singlefifostat.read().fiforeadcnt().ne(&0)
+        peripherals.iadc0_s.status().read().singlefifodv().bit_is_set() |
+        peripherals.iadc0_s.singlefifostat().read().fiforeadcnt().ne(&0)
     {
         let _dummy_data = peripherals
-            .IADC0_S
-            .singlefifodata
+            .iadc0_s
+            .singlefifodata()
             .read()
             .data();
     }
     while
-        peripherals.IADC0_S.status.read().scanfifodv().bit_is_set() |
-        peripherals.IADC0_S.scanfifostat.read().fiforeadcnt().ne(&0)
+        peripherals.iadc0_s.status().read().scanfifodv().bit_is_set() |
+        peripherals.iadc0_s.scanfifostat().read().fiforeadcnt().ne(&0)
     {
         let _dummy_data = peripherals
-            .IADC0_S
-            .scanfifodata
+            .iadc0_s
+            .scanfifodata()
             .read()
             .data();
     }
     let _dummy_data = peripherals
-        .IADC0_S
-        .singledata
+        .iadc0_s
+        .singledata()
         .read()
         .data();
     let _dummy_data = peripherals
-        .IADC0_S
-        .scandata
+        .iadc0_s
+        .scandata()
         .read()
         .data();
 
     disable_adc(peripherals);
 
     peripherals
-        .IADC0_S
-        .ctrl
+        .iadc0_s
+        .ctrl()
         .reset();
     peripherals
-        .IADC0_S
-        .timer
+        .iadc0_s
+        .timer()
         .reset();
     peripherals
-        .IADC0_S
-        .trigger
+        .iadc0_s
+        .trigger()
         .reset();
     peripherals
-        .IADC0_S
-        .cmpthr
+        .iadc0_s
+        .cmpthr()
         .reset();
     peripherals
-        .IADC0_S
-        .singlefifocfg
+        .iadc0_s
+        .singlefifocfg()
         .reset();
     peripherals
-        .IADC0_S
-        .scanfifocfg
+        .iadc0_s
+        .scanfifocfg()
         .reset();
     peripherals
-        .IADC0_S
-        .cfg0
+        .iadc0_s
+        .cfg0()
         .reset(); 
     peripherals
-        .IADC0_S
-        .scale0
+        .iadc0_s
+        .scale0()
         .reset();
     peripherals
-        .IADC0_S
-        .sched0
+        .iadc0_s
+        .sched0()
         .reset();
     peripherals
-        .IADC0_S
-        .cfg1
+        .iadc0_s
+        .cfg1()
         .reset();
     peripherals
-        .IADC0_S
-        .scale1
+        .iadc0_s
+        .scale1()
         .reset();
     peripherals
-        .IADC0_S
-        .sched1
-        .reset();
-
-    peripherals
-        .IADC0_S
-        .scan0
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan1
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan2
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan3
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan4
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan5
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan6
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan7
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan8
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan9
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan10
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan11
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan12
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan13
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan14
-        .reset();
-    peripherals
-        .IADC0_S
-        .scan15
+        .iadc0_s
+        .sched1()
         .reset();
 
     peripherals
-        .IADC0_S
-        .if_
+        .iadc0_s
+        .scan0()
         .reset();
     peripherals
-        .IADC0_S
-        .ien
+        .iadc0_s
+        .scan1()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan2()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan3()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan4()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan5()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan6()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan7()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan8()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan9()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan10()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan11()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan12()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan13()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan14()
+        .reset();
+    peripherals
+        .iadc0_s
+        .scan15()
+        .reset();
+
+    peripherals
+        .iadc0_s
+        .if_()
+        .reset();
+    peripherals
+        .iadc0_s
+        .ien()
         .reset();
 }
 

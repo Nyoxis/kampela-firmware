@@ -6,7 +6,7 @@ use crate::peripherals::{
     adc::init_adc, 
     cmu::init_cmu, 
     eusart::init_eusart, 
-    gpio_pins::init_gpio,
+    gpio_pins::{init_gpio, set_external_interrupts},
     i2c::init_i2c,
     ldma::{init_ldma, NfcXferBlock},
     timers::init_timers,
@@ -19,10 +19,10 @@ use crate::devices::flash::{flash_init,flash_sleep};
 /// All peripheral initializations
 pub fn init_peripherals(peripherals: &mut Peripherals, nfc_descriptor_address: *const NfcXferBlock) {
     // first, start clocking
-    init_cmu(&mut peripherals.CMU_S);
+    init_cmu(&mut peripherals.cmu_s);
 
     // map GPIO pins to their functions and set their starting values
-    init_gpio(&mut peripherals.GPIO_S);
+    init_gpio(&mut peripherals.gpio_s);
 
     // Setting up USART0, for epaper display and flash memory
     init_usart(peripherals);

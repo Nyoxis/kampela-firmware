@@ -154,22 +154,22 @@ impl Operation for Reset {
         if self.count() { return false };
         match self.state {
             ResetState::R0 => {
-                in_free(|peripherals| display_res_clear(&mut peripherals.GPIO_S));
+                in_free(|peripherals| display_res_clear(&mut peripherals.gpio_s));
                 self.wind_d(ResetState::R1);
                 false
             },
             ResetState::R1 => {
-                in_free(|peripherals| display_res_set(&mut peripherals.GPIO_S));
+                in_free(|peripherals| display_res_set(&mut peripherals.gpio_s));
                 self.wind_d(ResetState::R2);
                 false
             },
             ResetState::R2 => {
-                in_free(|peripherals| display_res_clear(&mut peripherals.GPIO_S));
+                in_free(|peripherals| display_res_clear(&mut peripherals.gpio_s));
                 self.wind_d(ResetState::R3);
                 false
             },
             ResetState::R3 => { // TODO: this is not ZERO operation, should it be here?
-                in_free(|peripherals| deselect_display(&mut peripherals.GPIO_S));
+                in_free(|peripherals| deselect_display(&mut peripherals.gpio_s));
                 true
             },
         }

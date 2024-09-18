@@ -1,5 +1,4 @@
 //! Everything high-level related to interfacing with user
-
 use nalgebra::{Affine2, OMatrix, Point2, RowVector3};
 use alloc::{borrow::ToOwned, collections::VecDeque, string::String, vec::Vec};
 use lazy_static::lazy_static;
@@ -14,7 +13,7 @@ use kampela_system::{
         psram::{psram_decode_call, psram_decode_extension, read_from_psram, PsramAccess},
         se_aes_gcm::{decode_entropy, encode_entropy, ProtectedPair},
         se_rng,
-        touch::{touch_detected, Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES}
+        touch::{is_touching, Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES}
     },
     draw::FrameBuffer,
     parallel::Operation,
@@ -59,7 +58,7 @@ impl UI {
         match self.status {
             UIStatus::DisplayOrListen(ref mut status) => {
                 // read input if possible
-                if touch_detected().unwrap_or(false) {
+                if is_touching().unwrap_or(false) {
                     if self.touched == false && !matches!(status, UIStatusDisplay::DisplayOperation(UpdateRequest::Slow)) {
                         self.touched = true;
                         self.status = UIStatus::TouchOperation(Read::new(()), core::mem::take( status));
@@ -70,16 +69,17 @@ impl UI {
                 }
                 match status {
                     UIStatusDisplay::Listen => {
-                        self.listen();
-                        Some(true) // done operations
+                        self.listen()
                     },
                     UIStatusDisplay::DisplayOperation(_) => {
                         match self.state.display.advance(voltage) {
                             Some(c) => {
                                 if c {
                                     self.status = UIStatus::DisplayOrListen(UIStatusDisplay::Listen);
+                                    Some(true)
+                                } else {
+                                    Some(false)
                                 }
-                                Some(false)
                             },
                             None => None, // not enough energy to start screen update
                         }
@@ -104,7 +104,7 @@ impl UI {
         }
     }
 
-    fn listen(&mut self) {
+    fn listen(&mut self) -> Option<bool> {
         if let Some(point) = self.touches.pop_front() {
             self.update_request.propagate(self.state.handle_tap(point, &mut ()));
         }
@@ -126,6 +126,9 @@ impl UI {
             if !matches!(u, UpdateRequest::Hidden) {
                 self.status = UIStatus::DisplayOrListen(UIStatusDisplay::DisplayOperation(u));
             }
+            None
+        } else {
+            Some(true) // done operations
         }
     }
 

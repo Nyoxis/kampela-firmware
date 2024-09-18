@@ -101,7 +101,7 @@ pub fn epaper_update_part(peripherals: &mut Peripherals) {
 
 /// Normal drawing protocol, with full screen clearing
 pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; BUFSIZE]) {
-    epaper_reset(&mut peripherals.GPIO_S);
+    epaper_reset(&mut peripherals.gpio_s);
     epaper_write_command(peripherals, &[0x4E]);
     epaper_write_data(peripherals, &[0x00]);
     epaper_write_command(peripherals, &[0x4F]);
@@ -115,7 +115,7 @@ pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; 
 
 /// Fast and dirty refresh drawing
 pub fn epaper_draw_stuff_quickly(peripherals: &mut Peripherals, stuff: [u8; BUFSIZE]) {
-    epaper_reset(&mut peripherals.GPIO_S);
+    epaper_reset(&mut peripherals.gpio_s);
     epaper_write_command(peripherals, &[0x4E]);
     epaper_write_data(peripherals, &[0x00]);
     epaper_write_command(peripherals, &[0x4F]);
