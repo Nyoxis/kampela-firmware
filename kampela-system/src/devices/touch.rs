@@ -5,9 +5,9 @@ use efm32pg23_fix::Peripherals;
 use cortex_m::asm::delay;
 
 use crate::peripherals::i2c::{acknowledge_i2c_tx, acknowledge_i2c_tx_free, check_i2c_errors, check_i2c_errors_free, I2CError, mstop_i2c_wait_and_clear, mstop_i2c_wait_and_clear_free, ReadI2C};
-use crate::peripherals::gpio_pins::{touch_res_set, touch_res_clear, is_touch_pin};
+use crate::peripherals::gpio_pins::{enable_touch_int_flag, disable_touch_int_flag, touch_res_clear};
 use crate::parallel::{DELAY, Operation};
-use crate::{FreeError, in_free, if_in_free};
+use crate::{in_free, if_in_free};
 
 pub const FT6X36_REG_CHIPID: u8 = 0xA3;
 pub const LEN_CHIPID: usize = 1;
@@ -253,15 +253,21 @@ pub fn ft6336_read_at<const LEN: usize>(peripherals: &mut Peripherals, position:
 }
 */
 
-pub fn is_touching() -> Result<bool, FreeError> {
-    if_in_free(|peripherals| { //TODO: use Interupt Flag
-        is_touch_pin(&mut peripherals.gpio_s)
+pub fn enable_touch_int() {
+    in_free(|peripherals| { //TODO: use Interupt Flag
+        enable_touch_int_flag(&mut peripherals.gpio_s)
+    })
+}
+
+pub fn disable_touch_int() {
+    in_free(|peripherals| { //TODO: use Interupt Flag
+        disable_touch_int_flag(&mut peripherals.gpio_s)
     })
 }
 
 pub fn init_touch(peripherals: &mut Peripherals) {
     touch_res_clear(&mut peripherals.gpio_s);
-    delay(3000000); // datasheet: 300ms after resetting
+    delay(6000000); // datasheet: 300ms after resetting
     // abort previous operations
     if peripherals
         .i2c0_s

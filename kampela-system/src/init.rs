@@ -6,7 +6,7 @@ use crate::peripherals::{
     adc::init_adc, 
     cmu::init_cmu, 
     eusart::init_eusart, 
-    gpio_pins::{init_gpio, set_external_interrupts},
+    gpio_pins::init_gpio,
     i2c::init_i2c,
     ldma::{init_ldma, NfcXferBlock},
     timers::init_timers,

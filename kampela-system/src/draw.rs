@@ -13,7 +13,7 @@ use embedded_graphics::{
 use kampela_display_common::display_def::*;
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 
-use crate::devices::display::{FastDraw, FullDraw, PartDraw, Request};
+use crate::devices::{display::{FastDraw, FullDraw, PartDraw, Request}, touch::{disable_touch_int, enable_touch_int}};
 use crate::devices::display_transmission::{epaper_deep_sleep, display_is_busy};
 use crate::debug_display::epaper_draw_stuff_differently;
 
@@ -110,6 +110,7 @@ impl FrameBuffer {
 
     /// Start full display update sequence
     pub fn request_full(&mut self) {
+        disable_touch_int();
         self.display_state = DisplayState::FullRequested;
     }
 
@@ -206,6 +207,7 @@ impl Operation for FrameBuffer {
                 if display_is_busy() == Ok(true) { return Some(false) };
                 in_free(|peripherals| epaper_deep_sleep(peripherals));
                 self.display_state = DisplayState::Idle;
+                enable_touch_int();
                 Some(true)
             },
         }

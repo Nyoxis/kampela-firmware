@@ -239,7 +239,6 @@ gpio_pin!(
 pub fn init_gpio(gpio: &mut GpioS) {
     map_gpio(gpio);
     set_gpio_pins(gpio);
-    set_external_interrupts(gpio);
 }
 
 /// Set GPIO functions
@@ -265,9 +264,15 @@ fn map_gpio(gpio: &mut GpioS) {
         .portb_model()
         .write(|w_reg| {
             w_reg
-                .mode1().input() // interrupts from display sensor
+                .mode1().inputpullfilter() // interrupts from display sensor
                 .mode4().input() // BUSY spi
     });
+    gpio
+        .portb_dout()
+        .write(|w_reg| unsafe {
+            w_reg
+                .dout().bits(1 << 1) //pull-up display sensor pin
+        });
     gpio
         .portc_model()
         .write(|w_reg| {
@@ -313,16 +318,8 @@ fn set_gpio_pins(gpio: &mut GpioS) {
     nfc_pin_clear(gpio);
 }
 
-pub fn is_touch_pin(gpio: &mut GpioS) -> bool {
-    gpio
-        .portb_din()
-        .read()
-        .din()
-        .bits() & 1 << TOUCH_INT_PIN == 0
-}
-
 /// Set up external interrupt pins (used to get touch events from touch pad)
-pub fn set_external_interrupts(gpio: &mut GpioS) {
+pub fn enable_touch_int_flag(gpio: &mut GpioS) {
     gpio
         .extipsell()
         .write(|w_reg| w_reg.extipsel0().portb());
@@ -337,5 +334,11 @@ pub fn set_external_interrupts(gpio: &mut GpioS) {
         .modify(|r_reg, w_reg| unsafe { w_reg.extifall().bits(r_reg.extifall().bits() | (1 << 0)) });
     gpio
         .ien()
-        .write(|w_reg| w_reg.extien0().set_bit());
+        .write(|w_reg| w_reg.extien0().set_bit())
+}
+
+pub fn disable_touch_int_flag(gpio: &mut GpioS) {
+    gpio
+        .ien()
+        .write(|w_reg| w_reg.extien0().clear_bit())
 }

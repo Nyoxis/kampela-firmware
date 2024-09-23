@@ -7,13 +7,21 @@ extern crate alloc;
 extern crate core;
 
 use alloc::{borrow::ToOwned, format};
-use core::{alloc::Layout, panic::PanicInfo};
-use core::ptr::addr_of;
-use cortex_m::asm::delay;
+use core::{cell::RefCell, ops::DerefMut, ptr::addr_of, alloc::Layout, panic::PanicInfo};
+use cortex_m::{interrupt::{free, Mutex}, asm::delay};
 use cortex_m_rt::{entry, exception, ExceptionFrame};
+
 use embedded_alloc::Heap;
 use lazy_static::lazy_static;
 
+use kampela_system::{
+    PERIPHERALS, CORE_PERIPHERALS,
+    devices::{power::ADC, touch::{Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES, enable_touch_int}},
+    debug_display::burning_tank,
+    init::init_peripherals,
+    parallel::Operation,
+    BUF_THIRD, CH_TIM0, LINK_1, LINK_2, LINK_DESCRIPTORS, TIMER0_CC0_ICF, NfcXfer, NfcXferBlock,
+};
 use efm32pg23_fix::{interrupt, Interrupt, NVIC, Peripherals};
 use kampela_ui::platform::Platform;
 
@@ -21,23 +29,11 @@ mod ui;
 use ui::UI;
 mod nfc;
 use nfc::{BufferStatus, NfcReceiver, NfcStateOutput, NfcResult, NfcError};
+mod touch;
+use touch::try_push_touch_data;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
-
-use kampela_system::{
-    PERIPHERALS, CORE_PERIPHERALS,
-    devices::power::ADC,
-    debug_display::burning_tank,
-    init::init_peripherals,
-    parallel::Operation,
-    BUF_THIRD, CH_TIM0, LINK_1, LINK_2, LINK_DESCRIPTORS, TIMER0_CC0_ICF, NfcXfer, NfcXferBlock,
-};
-
-use core::cell::RefCell;
-use core::ops::DerefMut;
-use cortex_m::interrupt::free;
-use cortex_m::interrupt::Mutex;
 
 lazy_static!{
     #[derive(Debug)]
@@ -141,6 +137,13 @@ fn main() -> ! {
             core_periph.NVIC.set_priority(Interrupt::LDMA, 3);
             NVIC::unmask(Interrupt::LDMA);
         }
+
+        NVIC::unpend(Interrupt::GPIO_EVEN);
+        NVIC::mask(Interrupt::GPIO_EVEN);
+        unsafe {
+            core_periph.NVIC.set_priority(Interrupt::GPIO_EVEN, 4);
+            NVIC::unmask(Interrupt::GPIO_EVEN);
+        }
     });
 
     //let pair_derived = Keypair::from_bytes(ALICE_KAMPELA_KEY).unwrap();
@@ -157,9 +160,6 @@ fn main() -> ! {
     });
 */
 
-    let mut ui = UI::init();
-    let mut adc = ADC::new(());
-
     // hard derivation
     //let junction = DeriveJunction::hard("kampela");
     // let pair_derived = pair
@@ -167,84 +167,146 @@ fn main() -> ! {
     //         .0
     //         .expand_to_keypair(ExpansionMode::Ed25519);
 
-
-    let mut nfc = NfcReceiver::new(&nfc_buffer, ui.state.platform.public().map(|a| a.0));
+    let mut main_state = MainState::init(&nfc_buffer);
     loop {
-        adc.advance(());
-        let nfc_state = nfc.advance(adc.read());
-        if let Some(s) = nfc_state {
-            match s {
-                Err(e) => {
-                    match e {
-                        NfcError::InvalidAddress => {
-                            ui.handle_message("Invalid sender address".to_owned())
-                        }
-                    }
-                    while !ui.advance(adc.read()).is_some_and(|c| c == true) {
-                        adc.advance(());
-                    }
-                    break
-                }
-                Ok(s) => {
-                    match s {
-                        NfcStateOutput::Operational(i) => {
-                            if i == 1 {
-                                ui.handle_message("Receiving NFC packets...".to_owned());
-                            }
-                            while ui.advance(adc.read()).is_none() {  //halt nfc receiving untill have enough charge to start update display
-                                adc.advance(());
-                            }
-                        },
-                        NfcStateOutput::Done(r) => {
-                            match r {
-                                NfcResult::Empty => {break},
-                                NfcResult::DisplayAddress => {
-                                    ui.handle_address([0;76]);
-                                    break
-                                },
-                                NfcResult::Transaction(transaction) => {
-                                    ui.handle_transaction(transaction);
-                                    break
-        
-        
-                /* // calculate correct hash of the payload
-                {
-                            let mut hasher = sha2::Sha256::new();
-                            in_free(|peripherals| {
-                                for shift in 0..nfc_payload.encoded_data.total_len {
-                                    let address = nfc_payload.encoded_data.start_address.try_shift(shift).unwrap();
-                                    let single_element_vec = psram_read_at_address(peripherals, address, 1usize).unwrap();
-                                    if shift == 0 {first_byte = Some(single_element_vec[0])}
-                                    hasher.update(&single_element_vec);
-                                }
-                            });
-                            let hash = hasher.finalize();
-        
-                            // transform signature and verifying key from der-encoding into usable form
-                            let signature = Signature::from_der(&nfc_payload.companion_signature).unwrap();
-                            let verifying_key = VerifyingKey::from_public_key_der(&nfc_payload.companion_public_key).unwrap();
-        
-                            // and check
-                            assert!(verifying_key
-                                .verify_prehash(&hash, &signature)
-                                .is_ok());
-        
-                }
-                */
-        
-                                },
-                            }
-                        }
-                    }
-                }
-            }
-
-
-        }
-    }
-    loop {
-        adc.advance(());
-        ui.advance(adc.read());
+        main_state.advance();
     }
 }
 
+lazy_static!{
+    // set by interrupt function, hence global
+    pub static ref DISPLAY_OR_TOUCH_STATUS: Mutex<RefCell<DisplayOrTouchStatus>> = Mutex::new(RefCell::new(DisplayOrTouchStatus::DisplayOrListen));
+}
+
+#[derive(Clone, Copy)]
+pub enum DisplayOrTouchStatus {
+    DisplayOrListen,
+    /// Touch event processing
+    TouchOperation,
+}
+
+fn set_display_or_touch_status(new_status: DisplayOrTouchStatus) {
+    free(|cs| {
+        let mut ui_status = DISPLAY_OR_TOUCH_STATUS.borrow(cs).borrow_mut();
+        *ui_status = new_status;
+    })
+}
+
+fn get_display_or_touch_status() -> DisplayOrTouchStatus {
+    free(|cs| DISPLAY_OR_TOUCH_STATUS.borrow(cs).borrow().to_owned())
+}
+
+enum MainStatus<'a> {
+    NFCReadOrDisplay(NFC<'a>),
+    DisplayOrTouch,
+}
+
+struct MainState<'a> {
+    adc: ADC,
+    status: MainStatus<'a>,
+    ui: UI,
+    touch: Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>,
+}
+
+enum NFCReadOrDisplayStatus {
+    NfcRead,
+    DisplayMessage,
+}
+
+struct NFC<'a> {
+    receiver: NfcReceiver<'a>,
+    status: NFCReadOrDisplayStatus,
+}
+
+impl<'a> MainState<'a> {
+    /// Start of UI.
+    pub fn init(nfc_buffer: &'a [u16; 3*BUF_THIRD]) -> Self {
+        let ui = UI::init();
+        let receiver = NfcReceiver::new(nfc_buffer, ui.state.platform.public().map(|a| a.0));
+        let nfc = NFC{receiver, status: NFCReadOrDisplayStatus::NfcRead};
+        let status = MainStatus::NFCReadOrDisplay(nfc);
+        return Self {
+            adc: ADC::new(()),
+            status,
+            ui,
+            touch: Read::new(()),
+        }
+    }
+
+    /// Call in event loop to progress through Kampela states
+    pub fn advance(&mut self) {
+        self.adc.advance(());
+        match &mut self.status {
+            MainStatus::<'a>::NFCReadOrDisplay(nfc) => {
+                let mut request_ui_interaction = false;
+                match nfc.status {
+                    NFCReadOrDisplayStatus::NfcRead => {
+                        if let Some(s) = nfc.receiver.advance(self.adc.read()) {
+                            match s {
+                                Err(e) => {
+                                    match e {
+                                        NfcError::InvalidAddress => {
+                                            self.ui.handle_message("Invalid sender address".to_owned())
+                                        }
+                                    }
+                                    request_ui_interaction = true;
+                                }
+                                Ok(s) => {
+                                    match s {
+                                        NfcStateOutput::Operational(i) => {
+                                            if i == 1 {
+                                                self.ui.handle_message("Receiving NFC packets...".to_owned());
+                                                nfc.status = NFCReadOrDisplayStatus::DisplayMessage;
+                                            }
+                                        },
+                                        NfcStateOutput::Done(r) => {
+                                            match r {
+                                                NfcResult::Empty => {request_ui_interaction = true},
+                                                NfcResult::DisplayAddress => {
+                                                    self.ui.handle_address([0;76]);
+                                                    request_ui_interaction = true;
+                                                },
+                                                NfcResult::Transaction(transaction) => {
+                                                    self.ui.handle_transaction(transaction);
+                                                    request_ui_interaction = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            nfc.status = NFCReadOrDisplayStatus::DisplayMessage;
+                        }
+                    },
+                    NFCReadOrDisplayStatus::DisplayMessage => {
+                        if !self.ui.advance(self.adc.read()).is_none() {  //halt nfc receiving untill have enough charge to start update display
+                            nfc.status = NFCReadOrDisplayStatus::NfcRead;
+                        }
+                    }
+                }
+                if request_ui_interaction {
+                    enable_touch_int();
+                    self.status = MainStatus::DisplayOrTouch;
+                }
+            }
+            MainStatus::DisplayOrTouch => {
+                match get_display_or_touch_status() {
+                    DisplayOrTouchStatus::DisplayOrListen => {
+                        self.ui.advance(self.adc.read());
+                    }
+                    DisplayOrTouchStatus::TouchOperation => {
+                        match self.touch.advance(()) {
+                            Ok(Some(touch)) => {
+                                try_push_touch_data(touch);
+                                set_display_or_touch_status(DisplayOrTouchStatus::DisplayOrListen);
+                            },
+                            Ok(None) => {},
+                            Err(e) => panic!("{:?}", e),
+                        }
+                    },
+                }
+            }
+
+        }
+    }
+}

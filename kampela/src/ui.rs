@@ -1,41 +1,27 @@
 //! Everything high-level related to interfacing with user
-use nalgebra::{Affine2, OMatrix, Point2, RowVector3};
-use alloc::{borrow::ToOwned, collections::VecDeque, string::String, vec::Vec};
-use lazy_static::lazy_static;
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use substrate_crypto_light::sr25519::{Pair, Public};
-use embedded_graphics::{
-    prelude::Point,
-    geometry::Dimensions,
-};
+use embedded_graphics::geometry::Dimensions;
 
 use kampela_system::{
     devices::{
         psram::{psram_decode_call, psram_decode_extension, read_from_psram, PsramAccess},
+        flash::{store_encoded_entopy, read_encoded_entropy},
         se_aes_gcm::{decode_entropy, encode_entropy, ProtectedPair},
         se_rng,
-        touch::{is_touching, Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES}
-    },
-    draw::FrameBuffer,
-    parallel::Operation,
-    flash_mnemonic::FlashWordList,
+    }, draw::FrameBuffer, flash_mnemonic::FlashWordList, parallel::Operation
 };
-use kampela_system::devices::flash::*;
-use crate::nfc::NfcTransactionPsramAccess;
+use crate::{nfc::NfcTransactionPsramAccess, touch::get_touch_point};
 use kampela_ui::{
-    display_def::*,
     platform::{PinCode, Platform},
     uistate::{UIState, UpdateRequest, UpdateRequestMutate}
 };
 
-const MAX_TOUCH_QUEUE: usize = 2;
-
 /// UI handler
 pub struct UI {
     pub state: UIState<Hardware, FrameBuffer>,
-    status: UIStatus,
-    touches: VecDeque<Point>,
-    touched: bool,
     update_request: Option<UpdateRequest>,
+    ui_status: UIStatus,
 }
 
 impl UI {
@@ -46,66 +32,39 @@ impl UI {
         let state = UIState::new(hardware, display, &mut ());
         return Self {
             state,
-            status: UIStatus::DisplayOrListen(UIStatusDisplay::Listen),
-            touches: VecDeque::new(),
-            touched: false,
             update_request: Some(UpdateRequest::Slow),
+            ui_status: UIStatus::Listen,
         }
     }
 
     /// Call in event loop to progress through UI state
     pub fn advance(&mut self, voltage: i32) -> Option<bool> {
-        match self.status {
-            UIStatus::DisplayOrListen(ref mut status) => {
-                // read input if possible
-                if is_touching().unwrap_or(false) {
-                    if self.touched == false && !matches!(status, UIStatusDisplay::DisplayOperation(UpdateRequest::Slow)) {
-                        self.touched = true;
-                        self.status = UIStatus::TouchOperation(Read::new(()), core::mem::take( status));
-                        return None
-                    }
-                } else {
-                    self.touched = false;
+        match self.ui_status {
+            UIStatus::Listen => {
+                let a = self.listen();
+                if a.unwrap_or(false) {
+                    cortex_m::asm::wfi(); // sleep waiting for tocuh irq
                 }
-                match status {
-                    UIStatusDisplay::Listen => {
-                        self.listen()
-                    },
-                    UIStatusDisplay::DisplayOperation(_) => {
-                        match self.state.display.advance(voltage) {
-                            Some(c) => {
-                                if c {
-                                    self.status = UIStatus::DisplayOrListen(UIStatusDisplay::Listen);
-                                    Some(true)
-                                } else {
-                                    Some(false)
-                                }
-                            },
-                            None => None, // not enough energy to start screen update
+                a
+            },
+            UIStatus::DisplayOperation => {
+                match self.state.display.advance(voltage) {
+                    Some(c) => {
+                        if c {
+                            self.ui_status = UIStatus::Listen;
+                            Some(true)
+                        } else {
+                            Some(false)
                         }
                     },
-                }
-            }
-            UIStatus::TouchOperation(ref mut touch, ref mut next) => {
-                match touch.advance(()) {
-                    Ok(Some(touch)) => {
-                        if self.touches.len() < MAX_TOUCH_QUEUE {
-                            if let Some(point) = convert(touch) {
-                                self.touches.push_back(point);
-                            }
-                        }
-                        self.status = UIStatus::DisplayOrListen(core::mem::take(next));
-                        None
-                    },
-                    Ok(None) => {None},
-                    Err(e) => panic!("{:?}", e),
+                    None => None, // not enough energy to start screen update
                 }
             },
         }
     }
 
     fn listen(&mut self) -> Option<bool> {
-        if let Some(point) = self.touches.pop_front() {
+        if let Some(point) = get_touch_point() {
             self.update_request.propagate(self.state.handle_tap(point, &mut ()));
         }
         // update ui if needed
@@ -124,7 +83,7 @@ impl UI {
                 UpdateRequest::Part(a) => self.state.display.request_part(a),
             }
             if !matches!(u, UpdateRequest::Hidden) {
-                self.status = UIStatus::DisplayOrListen(UIStatusDisplay::DisplayOperation(u));
+                self.ui_status = UIStatus::DisplayOperation;
             }
             None
         } else {
@@ -150,21 +109,16 @@ impl UI {
 ///
 /// There is no sense in reading input while screen processes last event, nor refreshing the screen
 /// before touch was parsed
-
-enum UIStatusDisplay {
+enum UIStatus {
     /// Event listening state, default
     Listen,
     /// Screen update started
-    DisplayOperation(UpdateRequest),
+    DisplayOperation,
 }
-impl Default for UIStatusDisplay {
-    fn default() -> Self { UIStatusDisplay::Listen }
+impl Default for UIStatus {
+    fn default() -> Self { UIStatus::Listen }
 }
-enum UIStatus {
-    DisplayOrListen(UIStatusDisplay),
-    /// Touch event processing
-    TouchOperation(Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>, UIStatusDisplay),
-}
+
 pub struct Hardware {
     pin: PinCode,
     protected_pair: Option<ProtectedPair>,
@@ -331,36 +285,4 @@ impl Platform for Hardware {
     }
 
 }
-
-lazy_static! {
-    // MAGIC calibration numbers obtained through KOLIBRI tool
-    static ref AFFINE_MATRIX: Affine2<f32> = Affine2::from_matrix_unchecked(
-        OMatrix::from_rows(&[
-            RowVector3::<f32>::new(1.0022, -0.0216, -4.2725),
-            RowVector3::<f32>::new(0.0061, 1.1433, -13.7305),
-            RowVector3::<f32>::new(0.0, 0.0, 1.0),
-        ])
-    );
-}
-
-
-
-pub fn convert(touch_data: [u8; LEN_NUM_TOUCHES]) -> Option<Point> {
-    if touch_data[0] == 1 {
-        let detected_y = (((touch_data[1] as u16 & 0b00001111) << 8) | touch_data[2] as u16) as i32;
-        let detected_x = (((touch_data[3] as u16 & 0b00001111) << 8) | touch_data[4] as u16) as i32;
-        let touch = Point::new(SCREEN_SIZE_X as i32 - detected_x, detected_y);
-
-        let touch_as_point2 = Point2::new(touch.x as f32, touch.y as f32);
-        let display_as_point2 = AFFINE_MATRIX.transform_point(&touch_as_point2);
-
-        Some(
-            Point {
-                x: display_as_point2.coords[0] as i32,
-                y: display_as_point2.coords[1] as i32,
-            }
-        )
-    } else { None }
-}
-
 
