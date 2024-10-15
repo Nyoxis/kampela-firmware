@@ -277,6 +277,7 @@ pub struct NfcTransactionPsramAccess {
     pub genesis_hash_bytes_psram_access: PsramAccess,
 }
 
+//TODO: implement more error cases, i.e. old specs
 pub enum NfcError {
     InvalidAddress,
 }

@@ -1,5 +1,4 @@
 use bitvec::prelude::{BitArr, Msb0, bitarr};
-
 use efm32pg23_fix::Peripherals;
 use embedded_graphics::{
     draw_target::DrawTarget,
@@ -13,13 +12,23 @@ use embedded_graphics::{
 use kampela_display_common::display_def::*;
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 
-use crate::devices::{display::{FastDraw, FullDraw, PartDraw, Request}, touch::{disable_touch_int, enable_touch_int}};
-use crate::devices::display_transmission::{epaper_deep_sleep, display_is_busy};
+use crate::{
+    in_free,
+    devices::{
+        display::{
+            UpdateFull,
+            UpdateFast,
+            UpdateUltraFast,
+            Request
+        },
+        touch::{disable_touch_int, enable_touch_int}
+    },
+    parallel::{Threads, AsyncOperation}
+};
+use crate::devices::display_transmission::epaper_deep_sleep;
 use crate::debug_display::epaper_draw_stuff_differently;
 
 const SCREEN_SIZE_VALUE: usize = (SCREEN_SIZE_X*SCREEN_SIZE_Y) as usize;
-
-use crate::{in_free, parallel::Operation}; 
 
 // x and y of framebuffer and display RAM address are inversed
 fn refreshable_area_address(refreshable_area: Rectangle) -> (u8, u8, u16, u16) {
@@ -78,8 +87,56 @@ type PixelData = BitArr!(for SCREEN_SIZE_VALUE, in u8, Msb0);
 /// A virtual display that could be written to EPD simultaneously
 pub struct FrameBuffer {
     data: PixelData,
-    display_state: DisplayState,
-    timer: usize,
+}
+
+pub struct DisplayOperationThreads(Threads<DisplayState, 1>);
+
+impl core::ops::Deref for DisplayOperationThreads {
+    type Target = Threads<DisplayState, 1>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for DisplayOperationThreads {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl DisplayOperationThreads {
+    pub fn new() -> Self {
+        Self(Threads::from([]))
+    }
+}
+
+impl DisplayOperationThreads {
+    /// Start full display update sequence
+    pub fn request_full(&mut self) {
+        disable_touch_int();
+        if self.is_any_running() {
+            panic!("more than one request at a time");
+        }
+        self.wind(DisplayState::FullOperating(None));
+    }
+
+    /// Start partial fast display update sequence
+    pub fn request_fast(&mut self) {
+        if self.is_any_running() {
+            panic!("more than one request at a time");
+        }
+        self.wind(DisplayState::FastOperating(None));
+    }
+
+    /// Start partial fast display update sequence
+    pub fn request_ultrafast(&mut self, area: Option<Rectangle>) {
+        if self.is_any_running() {
+            panic!("more than one request at a time");
+        }
+        let d: Option<(u8, u8, u16, u16)> = area.map(|r| refreshable_area_address(r));
+        self.wind(DisplayState::UltraFastOperating((None, d)));
+    }
 }
 
 impl FrameBuffer {
@@ -87,17 +144,6 @@ impl FrameBuffer {
     pub fn new_white() -> Self {
         Self {
             data: bitarr!(u8, Msb0; 1; SCREEN_SIZE_X as usize*SCREEN_SIZE_Y as usize),
-            display_state: DisplayState::Idle,
-            timer: 0,
-        }
-    }
-
-    fn count(&mut self) -> bool {
-        if self.timer == 0 {
-            false
-        } else {
-            self.timer -= 1;
-            true
         }
     }
 
@@ -106,22 +152,6 @@ impl FrameBuffer {
     /// this is for cs environment; do not use otherwise
     pub fn apply(&self, peripherals: &mut Peripherals) {
         epaper_draw_stuff_differently(peripherals, self.data.into_inner());
-    }
-
-    /// Start full display update sequence
-    pub fn request_full(&mut self) {
-        disable_touch_int();
-        self.display_state = DisplayState::FullRequested;
-    }
-
-    /// Start partial fast display update sequence
-    pub fn request_fast(&mut self) {
-        self.display_state = DisplayState::FastRequested;
-    }
-
-    /// Start partial fast display update sequence
-    pub fn request_part(&mut self, area: Rectangle) {
-        self.display_state = DisplayState::PartRequested(area);
     }
 }
 
@@ -132,81 +162,94 @@ impl FrameBuffer {
 pub enum DisplayState {
     /// Initial state, where we can change framebuffer. If this was typestate, this would be Zero.
     Idle,
-    /// Fast update was requested; waiting for power
-    FastRequested,
-    FastOperating(Request<FastDraw>),
     /// Slow update was requested; waiting for power
-    FullRequested,
-    FullOperating(Request<FullDraw>),
+    FullOperating(Option<Request<UpdateFull>>),
+    /// Fast update was requested; waiting for power
+    FastOperating(Option<Request<UpdateFast>>),
     /// Part update was requested; waiting for power
-    PartRequested(Rectangle),
-    PartOperating(Request<PartDraw>, (u8, u8, u16, u16)),
+    UltraFastOperating((Option<Request<UpdateUltraFast>>, Option<(u8, u8, u16, u16)>)),
     /// Display not available due to update cycle
     UpdatingNow,
 }
 
-impl Operation for FrameBuffer {
+impl Default for DisplayState {
+    fn default() -> Self { DisplayState::Idle }
+}
+
+impl AsyncOperation for FrameBuffer {
     type Init = ();
-    type Input<'a> = i32;
+    type Input<'a> = (i32, &'a mut DisplayOperationThreads);
     type Output = Option<bool>;
-    type StateEnum = DisplayState;
 
     fn new(_: ()) -> Self {
         Self::new_white()
     }
 
-    fn wind(&mut self, state: DisplayState, delay: usize) {
-        self.display_state = state;
-        self.timer = delay;
-    }
-
     /// Move through display update progress
-    fn advance(&mut self, voltage: i32) -> Option<bool> {
-        if self.count() { return None };
-
-        match self.display_state {
+    fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
+        match threads.advance_state() {
             DisplayState::Idle => Some(true),
-            DisplayState::FastRequested => {
-                if voltage > FAST_REFRESH_POWER {        
-                    self.display_state = DisplayState::FastOperating(Request::<FastDraw>::new(()));
-                };
-                None
-            },
-            DisplayState::FastOperating(ref mut a) => {
-                if a.advance(&self.data.data) {
-                    self.wind(DisplayState::UpdatingNow, 0)
+            DisplayState::FullOperating(state) => {
+                match state {
+                    None => {
+                        if voltage > FULL_REFRESH_POWER {
+                            threads.change(DisplayState::FullOperating(Some(Request::<UpdateFull>::new(None))));
+                        }
+                        None
+                    },
+                    Some(a) => {
+                        let r = a.advance(&self.data.data);
+                        if r == Some(true) {
+                            threads.change(DisplayState::UpdatingNow);
+                            Some(false)
+                        } else {
+                            r
+                        }
+                    }
                 }
-                Some(false)
             },
-            DisplayState::FullRequested => {
-                if voltage > FULL_REFRESH_POWER {
-                    self.display_state = DisplayState::FullOperating(Request::<FullDraw>::new(()));
-                };
-                None
-            },
-            DisplayState::FullOperating(ref mut a) => {
-                if a.advance(&self.data.data) {
-                    self.wind(DisplayState::UpdatingNow, 0)
+            DisplayState::FastOperating(state) => {
+                match state {
+                    None => {
+                        if voltage > FAST_REFRESH_POWER {
+                            threads.change(DisplayState::FastOperating(Some(Request::<UpdateFast>::new(None))));
+                        }
+                        None
+                    },
+                    Some(a) => {
+                        let r = a.advance(&self.data.data);
+                        if r == Some(true) {
+                            threads.change(DisplayState::UpdatingNow);
+                            Some(false)
+                        } else {
+                            r
+                        }
+                    }
                 }
-                Some(false)
             },
-            DisplayState::PartRequested(r) => {
-                if voltage > PART_REFRESH_POWER {
-                    let d: (u8, u8, u16, u16) = refreshable_area_address(r);
-                    self.display_state = DisplayState::PartOperating(Request::<PartDraw>::new(()), d);
-                };
-                None
-            },
-            DisplayState::PartOperating(ref mut a, bounds) => {
-                if a.advance((&self.data.data, bounds)) {
-                    self.wind(DisplayState::UpdatingNow, 0)
+            DisplayState::UltraFastOperating((state, bounds)) => {
+                match state {
+                    None => {
+                        if voltage > PART_REFRESH_POWER {
+                            let b = bounds.take();
+                            threads.change(DisplayState::UltraFastOperating((Some(Request::<UpdateUltraFast>::new(b)), None)));
+                        }
+                        None
+                    },
+                    Some(a) => {
+                        let r = a.advance(&self.data.data);
+                        if r == Some(true) {
+                            threads.change(DisplayState::UpdatingNow);
+                            Some(false)
+                        } else {
+                            r
+                        }
+                    }
                 }
-                Some(false)
             },
             DisplayState::UpdatingNow => {
-                if display_is_busy() == Ok(true) { return Some(false) };
                 in_free(|peripherals| epaper_deep_sleep(peripherals));
-                self.display_state = DisplayState::Idle;
+                threads.sync();
                 enable_touch_int();
                 Some(true)
             },

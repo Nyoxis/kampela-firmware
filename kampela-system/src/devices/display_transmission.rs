@@ -4,7 +4,7 @@ use cortex_m::asm::delay;
 use crate::peripherals::usart::*;
 use crate::peripherals::gpio_pins::{display_res_clear, display_res_set};
 use crate::{FreeError, if_in_free, in_free};
-use crate::parallel::Operation;
+use crate::parallel::{AsyncOperation, Threads};
 use kampela_display_common::display_def::*;
 
 pub const BUFSIZE: usize = 5808;
@@ -91,56 +91,58 @@ pub fn epaper_write_data(peripherals: &mut Peripherals, data_set: &[u8]) {
 
 /// Send command `C` to EPD
 pub struct EPDCommand<const C: u8>{
-    state: EPDByteState,
-    timer: usize,
+    threads: Threads<EPDByteState, 1>,
 }
 
 pub enum EPDByteState {
-    /// State where command is actually sent
     Init,
+    /// State where command is actually sent
+    Send,
     /// Receive something to keep protocol running and close connection
     Aftermath,
+    End,
 }
 
-impl <const C: u8> Operation for EPDCommand<C> {
+impl Default for EPDByteState {
+    fn default() -> Self { EPDByteState::End }
+}
+
+impl <const C: u8> AsyncOperation for EPDCommand<C> {
     type Init = ();
     type Input<'a> = ();
-    type Output = bool;
-    type StateEnum = EPDByteState;
+    type Output = Option<bool>;
 
     fn new(_: ()) -> Self {
         Self {
-            state: EPDByteState::Init,
-            timer: 0,
+            threads: Threads::new(EPDByteState::Init),
         }
     }
-
-    fn wind(&mut self, state: EPDByteState, delay: usize) {
-        self.state = state;
-        self.timer = delay;
-    }
     
-    fn advance(&mut self, _: ()) -> bool {
-        match self.state {
+    fn advance(&mut self, _: ()) -> Self::Output {
+        match self.threads.advance_state() {
             EPDByteState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    select_display(&mut peripherals.gpio_s);
                     display_select_command(&mut peripherals.gpio_s);
                 });
-                if if_in_free(|peripherals|
-                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
-                ) == Ok(false) {
-                    in_free(|peripherals|
-                        peripherals
-                            .usart0_s
-                            .txdata()
-                            .write(|w_reg| unsafe { w_reg.txdata().bits(C) })
-                            );
-                    self.change(EPDByteState::Aftermath);
-                }
-                false
+                self.threads.change(EPDByteState::Send);
+                Some(false)
             },
+            EPDByteState::Send => {
+                if if_in_free(|peripherals|
+                    peripherals.usart0_s.status().read().txbl().bit_is_set()
+                ) != Ok(true) {
+                    return None
+                }
+                in_free(|peripherals|
+                    peripherals
+                        .usart0_s
+                        .txdata()
+                        .write(|w_reg| unsafe { w_reg.txdata().bits(C) })
+                );
+                self.threads.change(EPDByteState::Aftermath);
+                Some(false)
+            }
             EPDByteState::Aftermath => {
                 if if_in_free(|peripherals|
                     peripherals
@@ -149,20 +151,25 @@ impl <const C: u8> Operation for EPDCommand<C> {
                         .read()
                         .txc()
                         .bit_is_set()
-                ) == Ok(false) {
-                    false
-                } else {
-                    in_free(|peripherals| {
-                        peripherals
-                            .usart0_s
-                            .rxdata()
-                            .read()
-                            .rxdata()
-                            .bits();
-                        deselect_display(&mut peripherals.gpio_s);
-                    });
-                    true
+                ) != Ok(true) {
+                    return None
                 }
+                in_free(|peripherals| {
+                    peripherals
+                        .usart0_s
+                        .rxdata()
+                        .read()
+                        .rxdata()
+                        .bits();
+                });
+                in_free(|peripherals| {
+                    deselect_display(&mut peripherals.gpio_s);
+                });
+                self.threads.change(EPDByteState::End);
+                Some(true)
+            },
+            EPDByteState::End => {
+                Some(true)
             },
         }
     }
@@ -172,48 +179,44 @@ impl <const C: u8> Operation for EPDCommand<C> {
 
 /// Send data byte `B` to EPD
 pub struct EPDDataB<const B: u8>{
-    state: EPDByteState,
-    timer: usize,
+    threads: Threads<EPDByteState, 1>,
 }
 
-impl <const B: u8> Operation for EPDDataB<B> {
+impl <const B: u8> AsyncOperation for EPDDataB<B> {
     type Init = ();
     type Input<'a> = ();
-    type Output = bool;
-    type StateEnum = EPDByteState;
+    type Output = Option<bool>;
 
     fn new(_: ()) -> Self {
         Self {
-            state: EPDByteState::Init,
-            timer: 0,
+            threads: Threads::new(EPDByteState::Init),
         }
     }
 
-    fn wind(&mut self, state: EPDByteState, delay: usize) {
-        self.state = state;
-        self.timer = delay;
-    }
-
-    fn advance(&mut self, _: ()) -> bool {
-        match self.state {
+    fn advance(&mut self, _: ()) -> Self::Output {
+        match self.threads.advance_state() {
             EPDByteState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    select_display(&mut peripherals.gpio_s);
                     display_select_data(&mut peripherals.gpio_s);
                 });
+                self.threads.change(EPDByteState::Send);
+                Some(false)
+            },
+            EPDByteState::Send => {
                 if if_in_free(|peripherals|
-                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
-                ) == Ok(false) {
-                    in_free(|peripherals|
-                        peripherals
-                            .usart0_s
-                            .txdata()
-                            .write(|w_reg| unsafe { w_reg.txdata().bits(B) })
-                            );
-                    self.change(EPDByteState::Aftermath);
+                    peripherals.usart0_s.status().read().txbl().bit_is_set()
+                ) != Ok(true) {
+                    return None
                 }
-                false
+                in_free(|peripherals|
+                    peripherals
+                        .usart0_s
+                        .txdata()
+                        .write(|w_reg| unsafe { w_reg.txdata().bits(B) })
+                );
+                self.threads.change(EPDByteState::Aftermath);
+                Some(false)
             },
             EPDByteState::Aftermath => {
                 if if_in_free(|peripherals|
@@ -223,84 +226,86 @@ impl <const B: u8> Operation for EPDDataB<B> {
                         .read()
                         .txc()
                         .bit_is_set()
-                ) == Ok(false) {
-                    false
-                } else {
-                    in_free(|peripherals| {
-                        peripherals
-                            .usart0_s
-                            .rxdata()
-                            .read()
-                            .rxdata()
-                            .bits();
-                        deselect_display(&mut peripherals.gpio_s);
-                    });
-                    true
+                ) != Ok(true) {
+                    return None
                 }
+                in_free(|peripherals| {
+                    peripherals
+                        .usart0_s
+                        .rxdata()
+                        .read()
+                        .rxdata()
+                        .bits();
+                });
+                in_free(|peripherals| {
+                    deselect_display(&mut peripherals.gpio_s);
+                });
+                self.threads.change(EPDByteState::End);
+                Some(true)
+            },
+            EPDByteState::End => {
+                Some(true)
             },
         }
     }
 }
 
-/// Send data byte `B` to EPD
-pub struct EPDData<const LEN: usize>{
-    state: EPDDataState,
-    position: usize,
-    timer: usize,
-}
-
+/// Send data array to EPD
 pub enum EPDDataState {
-    /// State where command is actually sent
     Init,
+    /// Send byte
     Send,
     WaitSend,
     /// Receive something to keep protocol running and close connection
     Aftermath,
+    End,
 }
 
-impl <const LEN: usize> Operation for EPDData<LEN> {
+impl Default for EPDDataState {
+    fn default() -> Self { EPDDataState::End }
+}
+
+pub struct EPDData<const LEN: usize>{
+    threads: Threads<EPDDataState, 1>,
+    position: usize,
+}
+
+impl <const LEN: usize> AsyncOperation for EPDData<LEN> {
     type Init = ();
     type Input<'a> = &'a [u8];
-    type Output = bool;
-    type StateEnum = EPDDataState;
+    type Output = Option<bool>;
 
-    fn new(_: ()) -> Self {
+    fn new(_: Self::Init) -> Self {
         Self {
-            state: EPDDataState::Init,
+            threads: Threads::new(EPDDataState::Init),
             position: 0,
-            timer: 0,
         }
     }
 
-    fn wind(&mut self, state: EPDDataState, delay: usize) {
-        self.state = state;
-        self.timer = delay;
-    }
-
-    fn advance(&mut self, data: Self::Input<'_>) -> bool {
-        match self.state {
+    fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
+        match self.threads.advance_state() {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    select_display(&mut peripherals.gpio_s);
                     display_select_data(&mut peripherals.gpio_s);
                 });
-                if if_in_free(|peripherals|
-                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
-                ) == Ok(false) {
-                    self.change(EPDDataState::Send);
-                }
-                false
+                self.threads.change(EPDDataState::Send);
+                Some(false)
             },
             EPDDataState::Send => {
+                if if_in_free(|peripherals|
+                    peripherals.usart0_s.status().read().txbl().bit_is_set()
+                ) != Ok(true) {
+                    return None
+                }
                 in_free(|peripherals|
                     peripherals
                         .usart0_s
                         .txdata()
                         .write(|w_reg| unsafe { w_reg.txdata().bits(data[self.position]) })
                 );
-                self.change(EPDDataState::WaitSend);
-                false
+                self.threads.change(EPDDataState::WaitSend);
+                Some(false)
             },
             EPDDataState::WaitSend => {
                 if if_in_free(|peripherals|
@@ -310,93 +315,98 @@ impl <const LEN: usize> Operation for EPDData<LEN> {
                         .read()
                         .txc()
                         .bit_is_set()
-                ) == Ok(true) {
-                    in_free(|peripherals| {
-                        peripherals
-                            .usart0_s
-                            .rxdata()
-                            .read()
-                            .rxdata()
-                            .bits();
-                    });
-                    if self.position < LEN-1 {
-                        self.position += 1;
-                        self.change(EPDDataState::Send);
-                    } else {
-                        self.change(EPDDataState::Aftermath);
-                    }
+                ) != Ok(true) {
+                    return None
                 }
-                false
+                in_free(|peripherals| {
+                    peripherals
+                        .usart0_s
+                        .rxdata()
+                        .read()
+                        .rxdata()
+                        .bits();
+                });
+                if self.position < LEN-1 {
+                    self.position += 1;
+                    self.threads.change(EPDDataState::Send);
+                } else {
+                    self.threads.change(EPDDataState::Aftermath);
+                }
+                Some(false)
             },
             EPDDataState::Aftermath => {
                 in_free(|peripherals| {
                     deselect_display(&mut peripherals.gpio_s);
                 });
-                true
+                self.threads.change(EPDDataState::End);
+                Some(true)
+            },
+            EPDDataState::End => {
+                Some(true)
             },
         }
     }
 }
 
-pub struct EPDDataPart<const LEN: usize>{
-    state: EPDDataState,
+pub struct EPDDataBuffer<const LEN: usize>{
+    threads: Threads<EPDDataState, 1>,
     position: usize,
-    x_start_position: usize,
-    x_end_position: usize,
-    y_end_position: usize,
-    timer: usize,
+    position_borders: Option<[usize; 4]>,
 }
 
-
-
-impl <const LEN: usize> Operation for EPDDataPart<LEN> {
-    type Init = (u8, u8, u16, u16);
+impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
+    type Init = Option<(u8, u8, u16, u16)>; // Borders of 2D array
     type Input<'a> = &'a [u8];
-    type Output = bool;
-    type StateEnum = EPDDataState;
+    type Output = Option<bool>;
 
     fn new(addresses: Self::Init) -> Self {
-        let x_start_position = addresses.0 as usize;
-        let y_start_position = (SCREEN_SIZE_X - 1) as usize - addresses.2 as usize; //Y coordinates inversed for some reason
+        let (position, position_borders) = match addresses {
+            None => {
+                (0, None)
+            },
+            Some(b) => {
+                let x_start_position = b.0 as usize;
+                let x_end_position = b.1 as usize;
+                let y_start_position = (SCREEN_SIZE_X - 1) as usize - b.2 as usize; //Y coordinates inversed for some reason
+                let y_end_position = (SCREEN_SIZE_X - 1) as usize - b.3 as usize;
+                (
+                    y_start_position * X_ADDRESS_WIDTH as usize + x_start_position,
+                    Some([x_start_position, x_end_position, y_start_position, y_end_position]),
+                )
+            }
+        };
+
         Self {
-            state: EPDDataState::Init,
-            position: y_start_position * X_ADDRESS_WIDTH as usize + x_start_position,
-            x_start_position,
-            x_end_position: addresses.1 as usize,
-            y_end_position: (SCREEN_SIZE_X - 1) as usize - addresses.3 as usize,
-            timer: 0,
+            threads: Threads::new(EPDDataState::Init),
+            position,
+            position_borders,
         }
     }
 
-    fn wind(&mut self, state: EPDDataState, delay: usize) {
-        self.state = state;
-        self.timer = delay;
-    }
-
-    fn advance(&mut self, data: Self::Input<'_>) -> bool {
-        match self.state {
+    fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
+        match self.threads.advance_state() {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                    select_display(&mut peripherals.gpio_s); // not necessary if state is known and default at start
+                    select_display(&mut peripherals.gpio_s);
                     display_select_data(&mut peripherals.gpio_s);
                 });
-                if if_in_free(|peripherals|
-                    peripherals.usart0_s.status().read().txbl().bit_is_clear()
-                ) == Ok(false) {
-                    self.change(EPDDataState::Send);
-                }
-                false
+                self.threads.change(EPDDataState::Send);
+                Some(false)
             },
             EPDDataState::Send => {
+                if if_in_free(|peripherals|
+                    peripherals.usart0_s.status().read().txbl().bit_is_set()
+                ) != Ok(true) {
+                    return None
+                }
                 in_free(|peripherals|
                     peripherals
                         .usart0_s
                         .txdata()
                         .write(|w_reg| unsafe { w_reg.txdata().bits(data[self.position]) })
                 );
-                self.change(EPDDataState::WaitSend);
-                false
+                self.threads.change(EPDDataState::WaitSend);
+                Some(false)
             },
             EPDDataState::WaitSend => {
                 if if_in_free(|peripherals|
@@ -406,36 +416,57 @@ impl <const LEN: usize> Operation for EPDDataPart<LEN> {
                         .read()
                         .txc()
                         .bit_is_set()
-                ) == Ok(true) {
-                    in_free(|peripherals| {
-                        peripherals
-                            .usart0_s
-                            .rxdata()
-                            .read()
-                            .rxdata()
-                            .bits();
-                    });
-                    if self.position < X_ADDRESS_WIDTH * self.y_end_position + self.x_end_position {
-                        let y_position = self.position / X_ADDRESS_WIDTH;
-                        let x_position = self.position - y_position * X_ADDRESS_WIDTH;
-                        
-                        if x_position >= self.x_end_position {
-                            self.position = (y_position + 1) * X_ADDRESS_WIDTH + self.x_start_position;
-                        } else {
+                ) != Ok(true) {
+                    return None
+                }
+                in_free(|peripherals| {
+                    peripherals
+                        .usart0_s
+                        .rxdata()
+                        .read()
+                        .rxdata()
+                        .bits();
+                });
+                match self.position_borders {
+                    None => {
+                        if self.position < LEN-1 {
                             self.position += 1;
+                            self.threads.change(EPDDataState::Send);
+                            if self.position % X_ADDRESS_WIDTH == 0 {
+                                return None // unblock thread
+                            }
+                        } else {
+                            self.threads.change(EPDDataState::Aftermath);
                         }
-                        self.change(EPDDataState::Send);
-                    } else {
-                        self.change(EPDDataState::Aftermath);
+                    },
+                    Some(b) => {
+                        if self.position < X_ADDRESS_WIDTH * b[3] + b[1] {
+                            let y_position = self.position / X_ADDRESS_WIDTH;
+                            let x_position = self.position - y_position * X_ADDRESS_WIDTH;
+
+                            self.threads.change(EPDDataState::Send);
+                            if x_position >= b[1] {
+                                self.position = (y_position + 1) * X_ADDRESS_WIDTH + b[0];
+                                return None // unblock thread
+                            } else {
+                                self.position += 1;
+                            }
+                        } else {
+                            self.threads.change(EPDDataState::Aftermath);
+                        }
                     }
                 }
-                false
+                Some(false)
             },
             EPDDataState::Aftermath => {
                 in_free(|peripherals| {
                     deselect_display(&mut peripherals.gpio_s);
                 });
-                true
+                self.threads.change(EPDDataState::End);
+                Some(true)
+            },
+            EPDDataState::End => {
+                Some(true)
             },
         }
     }

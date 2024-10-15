@@ -1,10 +1,10 @@
 //! Power measurement unit
 
-use crate::{if_in_free, parallel::Operation, peripherals::adc};
+use crate::{if_in_free, parallel::{AsyncOperation, Threads}, peripherals::adc};
 
 
 pub struct ADC {
-    state: ADCState,
+    threads: Threads<ADCState, 1>,
     last_value: i32,
 }
 
@@ -13,40 +13,42 @@ pub enum ADCState {
     Request,
 }
 
+impl Default for ADCState {
+    fn default() -> Self {
+        ADCState::Request
+    }
+}
+
 impl ADC {
     pub fn read(&self) -> i32 {
         self.last_value * 211 / 10000
     }
 }
 
-impl Operation for ADC {
+impl AsyncOperation for ADC {
     type Init = ();
     type Input<'a> = ();
     type Output = ();
-    type StateEnum = ADCState;
 
     fn new(_: ()) -> Self {
         Self{
-            state: ADCState::Ready,
+            threads: Threads::new(ADCState::Ready),
             last_value: 0,
         }
     }
 
-    fn wind(&mut self, state: ADCState, _delay: usize) {
-        self.state = state;
-    }
-
     fn advance(&mut self, _: Self::Input<'_>) {
-        match self.state {
+        match self.threads.advance_state() {
             ADCState::Ready => {
                 adc::reset_int_flags();
                 adc::request_adc_measure();
-                self.state = ADCState::Request;
+                self.threads.change(ADCState::Request);
             },
             ADCState::Request => {
                 if if_in_free(|peripherals| adc::read_int_flag(peripherals)) == Ok(true) {
                     self.last_value = adc::read_adc();
-                    self.state = ADCState::Ready;
+                    adc::reset_int_flags();
+                    adc::request_adc_measure();
                 }
             },
         }

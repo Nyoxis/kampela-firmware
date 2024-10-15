@@ -7,7 +7,7 @@ extern crate alloc;
 extern crate core;
 
 use alloc::{borrow::ToOwned, format};
-use core::{cell::RefCell, ops::DerefMut, ptr::addr_of, alloc::Layout, panic::PanicInfo};
+use core::{alloc::Layout, cell::RefCell, ops::DerefMut, panic::PanicInfo, ptr::addr_of};
 use cortex_m::{interrupt::{free, Mutex}, asm::delay};
 use cortex_m_rt::{entry, exception, ExceptionFrame};
 
@@ -19,18 +19,18 @@ use kampela_system::{
     devices::{power::ADC, touch::{Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES, enable_touch_int}},
     debug_display::burning_tank,
     init::init_peripherals,
-    parallel::Operation,
+    parallel::{AsyncOperation, Threads},
     BUF_THIRD, CH_TIM0, LINK_1, LINK_2, LINK_DESCRIPTORS, TIMER0_CC0_ICF, NfcXfer, NfcXferBlock,
 };
-use efm32pg23_fix::{interrupt, Interrupt, NVIC, Peripherals};
+use efm32pg23_fix::{interrupt, Interrupt, Peripherals, NVIC, SYST};
 use kampela_ui::platform::Platform;
 
 mod ui;
-use ui::UI;
+use ui::{UIOperationThreads, UI};
 mod nfc;
 use nfc::{BufferStatus, NfcReceiver, NfcStateOutput, NfcResult, NfcError};
 mod touch;
-use touch::try_push_touch_data;
+use touch::{try_push_touch_data, get_touch_status};
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -131,6 +131,12 @@ fn main() -> ! {
     
     free(|cs| {
         let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
+        // Errata CUR_E302 fix
+        // enable FPU to reduce power consumption in EM1
+        unsafe {
+            core_periph.SCB.cpacr.modify(|w_reg| w_reg | (3 << 20) | (3 << 22));
+        }
+
         NVIC::unpend(Interrupt::LDMA);
         NVIC::mask(Interrupt::LDMA);
         unsafe {
@@ -167,146 +173,143 @@ fn main() -> ! {
     //         .0
     //         .expand_to_keypair(ExpansionMode::Ed25519);
 
-    let mut main_state = MainState::init(&nfc_buffer);
+    let mut main_state = MainState::new(&nfc_buffer);
     loop {
-        main_state.advance();
+        main_state.advance(());
     }
 }
 
-lazy_static!{
-    // set by interrupt function, hence global
-    pub static ref DISPLAY_OR_TOUCH_STATUS: Mutex<RefCell<DisplayOrTouchStatus>> = Mutex::new(RefCell::new(DisplayOrTouchStatus::DisplayOrListen));
-}
-
-#[derive(Clone, Copy)]
-pub enum DisplayOrTouchStatus {
-    DisplayOrListen,
-    /// Touch event processing
-    TouchOperation,
-}
-
-fn set_display_or_touch_status(new_status: DisplayOrTouchStatus) {
-    free(|cs| {
-        let mut ui_status = DISPLAY_OR_TOUCH_STATUS.borrow(cs).borrow_mut();
-        *ui_status = new_status;
-    })
-}
-
-fn get_display_or_touch_status() -> DisplayOrTouchStatus {
-    free(|cs| DISPLAY_OR_TOUCH_STATUS.borrow(cs).borrow().to_owned())
-}
-
 enum MainStatus<'a> {
-    NFCReadOrDisplay(NFC<'a>),
-    DisplayOrTouch,
+    ADCProbe,
+    NFCRead(NfcReceiver<'a>),
+    Display(Option<UIOperationThreads>),
+    TouchRead(Option<Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>>),
+}
+
+impl<'a> Default for MainStatus<'a> {
+    fn default() -> Self {
+        MainStatus::ADCProbe
+    }
 }
 
 struct MainState<'a> {
+    threads: Threads<MainStatus<'a>, 3>,
     adc: ADC,
-    status: MainStatus<'a>,
     ui: UI,
-    touch: Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>,
 }
 
-enum NFCReadOrDisplayStatus {
-    NfcRead,
-    DisplayMessage,
-}
-
-struct NFC<'a> {
-    receiver: NfcReceiver<'a>,
-    status: NFCReadOrDisplayStatus,
-}
-
-impl<'a> MainState<'a> {
+impl<'a> AsyncOperation for MainState<'a> {
+    type Init = &'a [u16; 3*BUF_THIRD];
+    type Input<'b> = ();
+    type Output = ();
     /// Start of UI.
-    pub fn init(nfc_buffer: &'a [u16; 3*BUF_THIRD]) -> Self {
-        let ui = UI::init();
+    fn new(nfc_buffer: Self::Init) -> Self {
+        let ui = UI::new(());
         let receiver = NfcReceiver::new(nfc_buffer, ui.state.platform.public().map(|a| a.0));
-        let nfc = NFC{receiver, status: NFCReadOrDisplayStatus::NfcRead};
-        let status = MainStatus::NFCReadOrDisplay(nfc);
+        
+        // initialize SYST for Timer
+        free(|cs| {  
+            let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
+            
+            core_periph.SYST.set_reload(SYST::get_ticks_per_10ms());
+            core_periph.SYST.clear_current();
+            core_periph.SYST.enable_counter();
+        });
         return Self {
+            threads: Threads::from([
+                MainStatus::ADCProbe,
+                MainStatus::NFCRead(receiver),
+            ]),
             adc: ADC::new(()),
-            status,
             ui,
-            touch: Read::new(()),
         }
     }
 
     /// Call in event loop to progress through Kampela states
-    pub fn advance(&mut self) {
-        self.adc.advance(());
-        match &mut self.status {
-            MainStatus::<'a>::NFCReadOrDisplay(nfc) => {
-                let mut request_ui_interaction = false;
-                match nfc.status {
-                    NFCReadOrDisplayStatus::NfcRead => {
-                        if let Some(s) = nfc.receiver.advance(self.adc.read()) {
-                            match s {
-                                Err(e) => {
-                                    match e {
-                                        NfcError::InvalidAddress => {
-                                            self.ui.handle_message("Invalid sender address".to_owned())
-                                        }
-                                    }
-                                    request_ui_interaction = true;
-                                }
-                                Ok(s) => {
-                                    match s {
-                                        NfcStateOutput::Operational(i) => {
-                                            if i == 1 {
-                                                self.ui.handle_message("Receiving NFC packets...".to_owned());
-                                                nfc.status = NFCReadOrDisplayStatus::DisplayMessage;
-                                            }
-                                        },
-                                        NfcStateOutput::Done(r) => {
-                                            match r {
-                                                NfcResult::Empty => {request_ui_interaction = true},
-                                                NfcResult::DisplayAddress => {
-                                                    self.ui.handle_address([0;76]);
-                                                    request_ui_interaction = true;
-                                                },
-                                                NfcResult::Transaction(transaction) => {
-                                                    self.ui.handle_transaction(transaction);
-                                                    request_ui_interaction = true;
-                                                }
-                                            }
-                                        }
-                                    }
+    fn advance(&mut self, _: ()) {
+        match &mut self.threads.advance_state() {
+            MainStatus::ADCProbe => {
+                self.adc.advance(());
+            },
+            MainStatus::NFCRead(receiver) => {
+                if let Some(s) = receiver.advance(self.adc.read()) {
+                    match s {
+                        Err(e) => {
+                            match e {
+                                NfcError::InvalidAddress => {
+                                    self.ui.handle_message("Invalid sender address".to_owned())
                                 }
                             }
-                            nfc.status = NFCReadOrDisplayStatus::DisplayMessage;
+                            self.threads.change(MainStatus::Display(None));
+                        }
+                        Ok(s) => {
+                            match s {
+                                NfcStateOutput::Operational(i) => {
+                                    if i == 1 {
+                                        self.ui.handle_message("Receiving NFC packets...".to_owned());
+                                        if !self.threads.is_all_running(&[
+                                            |s| matches!(s, MainStatus::Display(_))
+                                        ]) {
+                                            self.threads.wind(MainStatus::Display(None));
+                                        };
+                                    }
+                                },
+                                NfcStateOutput::Done(r) => {
+                                    match r {
+                                        NfcResult::Empty => {
+                                            if !self.threads.is_all_running(&[
+                                                |s| matches!(s, MainStatus::Display(_))
+                                            ]) {
+                                                self.threads.wind(MainStatus::Display(None));
+                                            };
+                                        },
+                                        NfcResult::DisplayAddress => {
+                                            self.ui.handle_address([0;76]);
+                                        },
+                                        NfcResult::Transaction(transaction) => {
+                                            self.ui.handle_transaction(transaction);
+                                        }
+                                    }
+                                    enable_touch_int();
+                                    self.threads.change(MainStatus::TouchRead(None));
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            MainStatus::Display(state) => {
+                match state {
+                    None => {
+                        self.threads.change(MainStatus::Display(Some(UIOperationThreads::new())));
+                    },
+                    Some(t) => {
+                        if self.ui.advance((self.adc.read(), t)) == Some(false) {
+                            self.threads.hold();
+                        }
+                    }
+                }
+            },
+            MainStatus::TouchRead(state) => {
+                match state {
+                    None => {
+                        if get_touch_status() {
+                            self.threads.change(MainStatus::TouchRead(Some(Read::new(()))));
                         }
                     },
-                    NFCReadOrDisplayStatus::DisplayMessage => {
-                        if !self.ui.advance(self.adc.read()).is_none() {  //halt nfc receiving untill have enough charge to start update display
-                            nfc.status = NFCReadOrDisplayStatus::NfcRead;
-                        }
-                    }
-                }
-                if request_ui_interaction {
-                    enable_touch_int();
-                    self.status = MainStatus::DisplayOrTouch;
-                }
-            }
-            MainStatus::DisplayOrTouch => {
-                match get_display_or_touch_status() {
-                    DisplayOrTouchStatus::DisplayOrListen => {
-                        self.ui.advance(self.adc.read());
-                    }
-                    DisplayOrTouchStatus::TouchOperation => {
-                        match self.touch.advance(()) {
-                            Ok(Some(touch)) => {
+                    Some(reader) => {
+                        match reader.advance(()) {
+                            Ok(Some(Some(touch))) => {
                                 try_push_touch_data(touch);
-                                set_display_or_touch_status(DisplayOrTouchStatus::DisplayOrListen);
+                                self.threads.change(MainStatus::TouchRead(None));
                             },
-                            Ok(None) => {},
+                            Ok(Some(None)) => {self.threads.hold()},
+                            Ok(None) => {}
                             Err(e) => panic!("{:?}", e),
                         }
-                    },
+                    }
                 }
-            }
-
+            },
         }
     }
 }

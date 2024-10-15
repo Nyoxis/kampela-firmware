@@ -1,15 +1,17 @@
 //! Everything high-level related to interfacing with user
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use substrate_crypto_light::sr25519::{Pair, Public};
-use embedded_graphics::geometry::Dimensions;
 
 use kampela_system::{
     devices::{
+        flash::{read_encoded_entropy, store_encoded_entopy},
         psram::{psram_decode_call, psram_decode_extension, read_from_psram, PsramAccess},
-        flash::{store_encoded_entopy, read_encoded_entropy},
         se_aes_gcm::{decode_entropy, encode_entropy, ProtectedPair},
-        se_rng,
-    }, draw::FrameBuffer, flash_mnemonic::FlashWordList, parallel::Operation
+        se_rng
+    },
+    draw::{DisplayOperationThreads, FrameBuffer},
+    flash_mnemonic::FlashWordList,
+    parallel::{AsyncOperation, Threads}
 };
 use crate::{nfc::NfcTransactionPsramAccess, touch::get_touch_point};
 use kampela_ui::{
@@ -21,49 +23,32 @@ use kampela_ui::{
 pub struct UI {
     pub state: UIState<Hardware, FrameBuffer>,
     update_request: Option<UpdateRequest>,
-    ui_status: UIStatus,
+}
+
+pub struct UIOperationThreads(Threads<UIStatus, 1>);
+
+impl core::ops::Deref for UIOperationThreads {
+    type Target = Threads<UIStatus, 1>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for UIOperationThreads {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl UIOperationThreads {
+    pub fn new() -> Self {
+        Self(Threads::from([]))
+    }
 }
 
 impl UI {
-    /// Start of UI.
-    pub fn init() -> Self {
-        let hardware = Hardware::new();
-        let display = FrameBuffer::new_white();
-        let state = UIState::new(hardware, display, &mut ());
-        return Self {
-            state,
-            update_request: Some(UpdateRequest::Slow),
-            ui_status: UIStatus::Listen,
-        }
-    }
-
-    /// Call in event loop to progress through UI state
-    pub fn advance(&mut self, voltage: i32) -> Option<bool> {
-        match self.ui_status {
-            UIStatus::Listen => {
-                let a = self.listen();
-                if a.unwrap_or(false) {
-                    cortex_m::asm::wfi(); // sleep waiting for tocuh irq
-                }
-                a
-            },
-            UIStatus::DisplayOperation => {
-                match self.state.display.advance(voltage) {
-                    Some(c) => {
-                        if c {
-                            self.ui_status = UIStatus::Listen;
-                            Some(true)
-                        } else {
-                            Some(false)
-                        }
-                    },
-                    None => None, // not enough energy to start screen update
-                }
-            },
-        }
-    }
-
-    fn listen(&mut self) -> Option<bool> {
+    fn listen(&mut self, threads: &mut UIOperationThreads) -> Option<bool> {
         if let Some(point) = get_touch_point() {
             self.update_request.propagate(self.state.handle_tap(point, &mut ()));
         }
@@ -72,18 +57,16 @@ impl UI {
             let is_clear_update = matches!(u, UpdateRequest::Slow) || matches!(u, UpdateRequest::Fast);
             self.update_request.propagate(self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented"));
 
+            let mut display_operation_threads = DisplayOperationThreads::new();
             match u {
                 UpdateRequest::Hidden => (),
-                UpdateRequest::Slow => self.state.display.request_full(),
-                UpdateRequest::Fast => self.state.display.request_fast(),
-                UpdateRequest::UltraFast => {
-                    let a = self.state.display.bounding_box();
-                    self.state.display.request_part(a);
-                },
-                UpdateRequest::Part(a) => self.state.display.request_part(a),
+                UpdateRequest::Slow => display_operation_threads.request_full(),
+                UpdateRequest::Fast => display_operation_threads.request_fast(),
+                UpdateRequest::UltraFast => display_operation_threads.request_ultrafast(None),
+                UpdateRequest::Part(a) => display_operation_threads.request_ultrafast(Some(a)),
             }
             if !matches!(u, UpdateRequest::Hidden) {
-                self.ui_status = UIStatus::DisplayOperation;
+                threads.wind(UIStatus::DisplayOperation(display_operation_threads));
             }
             None
         } else {
@@ -105,15 +88,51 @@ impl UI {
     }
 }
 
+impl AsyncOperation for UI {
+    type Init = ();
+    type Input<'a> = (i32, &'a mut UIOperationThreads);
+    type Output = Option<bool>;
+    
+    /// Start of UI.
+    fn new(_: Self::Init) -> Self {
+        let hardware = Hardware::new();
+        let display = FrameBuffer::new_white();
+        let state = UIState::new(hardware, display, &mut ());
+        return Self {
+            state,
+            update_request: Some(UpdateRequest::Slow),
+        }
+    }
+    /// Call in event loop to progress through UI state
+    fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
+        match threads.advance_state() {
+            UIStatus::Listen => {
+                let a = self.listen(threads);
+                if a.unwrap_or(false) {
+                    //cortex_m::asm::wfi(); // sleep waiting for tocuh irq
+                }
+                a
+            },
+            UIStatus::DisplayOperation(t) => {
+                let r = self.state.display.advance((voltage, t));
+                if r == Some(true) {
+                    threads.sync();
+                }
+                r
+            },
+        }
+    }
+}
+
 /// General status of UI
 ///
 /// There is no sense in reading input while screen processes last event, nor refreshing the screen
 /// before touch was parsed
-enum UIStatus {
+pub enum UIStatus {
     /// Event listening state, default
     Listen,
     /// Screen update started
-    DisplayOperation,
+    DisplayOperation(DisplayOperationThreads),
 }
 impl Default for UIStatus {
     fn default() -> Self { UIStatus::Listen }

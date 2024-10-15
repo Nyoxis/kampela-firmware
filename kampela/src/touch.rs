@@ -1,4 +1,4 @@
-use alloc::collections::vec_deque::VecDeque;
+use alloc::{collections::vec_deque::VecDeque, borrow::ToOwned};
 use nalgebra::{Affine2, OMatrix, Point2, RowVector3};
 use lazy_static::lazy_static;
 use embedded_graphics::prelude::Point;
@@ -9,8 +9,6 @@ use cortex_m::interrupt::{free, Mutex};
 use kampela_system::{devices::touch::LEN_NUM_TOUCHES, in_free, if_in_free};
 use kampela_ui::display_def::*;
 use efm32pg23_fix::interrupt;
-
-use crate::{DisplayOrTouchStatus, DISPLAY_OR_TOUCH_STATUS};
 
 pub const MAX_TOUCH_QUEUE: usize = 2;
 
@@ -25,6 +23,19 @@ lazy_static! {
     );
     // touches len needed in interrupt function, hence global
     pub static ref TOUCHES: Mutex<RefCell<VecDeque<Point>>> = Mutex::new(RefCell::new(VecDeque::with_capacity(MAX_TOUCH_QUEUE)));
+    // set by interrupt function, hence global
+    pub static ref TOUCH_STATUS: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
+}
+
+fn reset_touch_status() {
+    free(|cs| {
+        let mut touch_status = TOUCH_STATUS.borrow(cs).borrow_mut();
+        *touch_status = false;
+    })
+}
+
+pub fn get_touch_status() -> bool {
+    free(|cs| TOUCH_STATUS.borrow(cs).borrow().to_owned())
 }
 
 #[interrupt]  // IRQ required to wake up after vfi
@@ -37,8 +48,8 @@ fn GPIO_EVEN() {  // Swtich status to start read touch
     free(|cs| {
         let touches = TOUCHES.borrow(cs).borrow();
         if touches.len() < MAX_TOUCH_QUEUE {
-            let mut status = DISPLAY_OR_TOUCH_STATUS.borrow(cs).borrow_mut();
-            *status = DisplayOrTouchStatus::TouchOperation
+            let mut status = TOUCH_STATUS.borrow(cs).borrow_mut();
+            *status = true
         }
     });
     in_free(|peripherals|
@@ -47,6 +58,7 @@ fn GPIO_EVEN() {  // Swtich status to start read touch
 }
 
 pub fn try_push_touch_data(touch_data: [u8; LEN_NUM_TOUCHES]) {
+    reset_touch_status();
     if let Some(point) = convert(touch_data) {
         free(|cs| {
             let mut touches = TOUCHES.borrow(cs).borrow_mut();

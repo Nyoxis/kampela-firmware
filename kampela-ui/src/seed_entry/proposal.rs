@@ -144,8 +144,7 @@ impl<P: Platform> Proposal<P> {
             guess.append(&mut g);
             // break if there too many guesses to display
             // and if at least found two variants
-            // except if all variants needed, hence !guessed_variants_is_some
-            if guess.len() >= MAX_PROPOSAL && new_variants.len() > 1 {
+            if guess.len() >= MAX_PROPOSAL && (new_variants.len() > 1 || self.entered.len() <= 1) {
                 break;
             }
         }
