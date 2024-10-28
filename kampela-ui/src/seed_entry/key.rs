@@ -51,7 +51,7 @@ impl Key {
 }
 
 impl View for Key {
-    type DrawInput<'a> = bool;
+    type DrawInput<'a> = (bool, bool);
     type DrawOutput = bool;
     type TapInput<'a> = ();
     type TapOutput = char;
@@ -64,13 +64,16 @@ impl View for Key {
         self.widget.bounding_box_absolute()
     }
 
-    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, n: Self::DrawInput<'_>) -> Result<Self::DrawOutput,D::Error>
+    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, (t, n): Self::DrawInput<'_>) -> Result<Self::DrawOutput,D::Error>
         where 
             D: DrawTarget<Color = BinaryColor>,
             Self: 'a,
         {
         let mut was_tapped = false;
-        self.draw_initial(target, n)?;
+
+        if !t {
+            self.draw_initial(target, n)?;
+        }
         if self.this_tapped {
             was_tapped = true;
             self.draw_tapped(target, n)?;

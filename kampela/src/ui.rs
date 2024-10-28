@@ -62,8 +62,9 @@ impl UI {
                 UpdateRequest::Hidden => (),
                 UpdateRequest::Slow => display_operation_threads.request_full(),
                 UpdateRequest::Fast => display_operation_threads.request_fast(),
-                UpdateRequest::UltraFast => display_operation_threads.request_ultrafast(None),
-                UpdateRequest::Part(a) => display_operation_threads.request_ultrafast(Some(a)),
+                UpdateRequest::UltraFast => display_operation_threads.request_ultrafast(),
+                UpdateRequest::PartBlack(a) => display_operation_threads.request_part_black(Some(a)),
+                UpdateRequest::PartWhite(a) => display_operation_threads.request_part_white(Some(a)),
             }
             if !matches!(u, UpdateRequest::Hidden) {
                 threads.wind(UIStatus::DisplayOperation(display_operation_threads));

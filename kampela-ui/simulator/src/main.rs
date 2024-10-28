@@ -1,10 +1,7 @@
 //! This is simulator to develop Kampela UI mocks
 #![deny(unused_crate_dependencies)]
 use embedded_graphics_core::{
-    primitives::PointsIter,
-    Drawable,
-    pixelcolor::BinaryColor,
-    Pixel,
+    pixelcolor::BinaryColor, primitives::{PointsIter, Rectangle}, Drawable, Pixel
 };
 
 use embedded_graphics_simulator::{
@@ -232,6 +229,7 @@ fn main() {
         if let Some(u) = update.take() {
             sleep(UPDATE_DELAY_TIME);
             let is_clear_update = matches!(u, UpdateRequest::Slow) || matches!(u, UpdateRequest::Fast);
+            let mut previous = state.display.clone();
             match state.render(is_clear_update, &mut h) {
                 Ok(a) => update.propagate(a),
                 Err(e) => println!("{:?}", e),
@@ -273,9 +271,18 @@ fn main() {
                     println!("ultrafast update");
                     sleep(ULTRAFAST_UPDATE_TIME);
                 },
-                UpdateRequest::Part(a) => {
+                UpdateRequest::PartBlack(ref a) => {
+                    draw_black_ontop(&mut previous, &state.display, a);
+                    state.display = previous;
                     window.update(&state.display);
-                    println!("part update of area {:?}", a);
+                    println!("part update with black of area {:?}", a);
+                    sleep(ULTRAFAST_UPDATE_TIME);
+                },
+                UpdateRequest::PartWhite(ref a) => {
+                    draw_white_ontop(&mut previous, &state.display, a);
+                    state.display = previous;
+                    window.update(&state.display);
+                    println!("part update with white of area {:?}", a);
                     sleep(ULTRAFAST_UPDATE_TIME);
                 },
             }
@@ -310,5 +317,23 @@ fn invert_display(display: &mut SimulatorDisplay<BinaryColor>) {
     for point in SCREEN_AREA.points() {
         let dot = Pixel::<BinaryColor>(point, display.get_pixel(point).invert());
         dot.draw(display).unwrap();
+    };
+}
+
+fn draw_black_ontop(display: &mut SimulatorDisplay<BinaryColor>, new_display: &SimulatorDisplay<BinaryColor>, area: &Rectangle) {
+    for point in area.points() {
+        let dot = Pixel::<BinaryColor>(point, new_display.get_pixel(point));
+        if dot.1.is_on() {
+            dot.draw(display).unwrap();
+        }
+    };
+}
+
+fn draw_white_ontop(display: &mut SimulatorDisplay<BinaryColor>, new_display: &SimulatorDisplay<BinaryColor>, area: &Rectangle) {
+    for point in area.points() {
+        let dot = Pixel::<BinaryColor>(point, new_display.get_pixel(point));
+        if dot.1.is_off() {
+            dot.draw(display).unwrap();
+        }
     };
 }

@@ -5,6 +5,8 @@ use crate::peripherals::usart::*;
 use crate::peripherals::gpio_pins::{display_res_clear, display_res_set};
 use crate::{FreeError, if_in_free, in_free};
 use crate::parallel::{AsyncOperation, Threads};
+
+use crate::devices::display::Bounds;
 use kampela_display_common::display_def::*;
 
 pub const BUFSIZE: usize = 5808;
@@ -175,81 +177,6 @@ impl <const C: u8> AsyncOperation for EPDCommand<C> {
     }
 }
 
-
-
-/// Send data byte `B` to EPD
-pub struct EPDDataB<const B: u8>{
-    threads: Threads<EPDByteState, 1>,
-}
-
-impl <const B: u8> AsyncOperation for EPDDataB<B> {
-    type Init = ();
-    type Input<'a> = ();
-    type Output = Option<bool>;
-
-    fn new(_: ()) -> Self {
-        Self {
-            threads: Threads::new(EPDByteState::Init),
-        }
-    }
-
-    fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
-            EPDByteState::Init => {
-                in_free(|peripherals| {
-                    select_display(&mut peripherals.gpio_s);
-                    display_select_data(&mut peripherals.gpio_s);
-                });
-                self.threads.change(EPDByteState::Send);
-                Some(false)
-            },
-            EPDByteState::Send => {
-                if if_in_free(|peripherals|
-                    peripherals.usart0_s.status().read().txbl().bit_is_set()
-                ) != Ok(true) {
-                    return None
-                }
-                in_free(|peripherals|
-                    peripherals
-                        .usart0_s
-                        .txdata()
-                        .write(|w_reg| unsafe { w_reg.txdata().bits(B) })
-                );
-                self.threads.change(EPDByteState::Aftermath);
-                Some(false)
-            },
-            EPDByteState::Aftermath => {
-                if if_in_free(|peripherals|
-                    peripherals
-                        .usart0_s
-                        .status()
-                        .read()
-                        .txc()
-                        .bit_is_set()
-                ) != Ok(true) {
-                    return None
-                }
-                in_free(|peripherals| {
-                    peripherals
-                        .usart0_s
-                        .rxdata()
-                        .read()
-                        .rxdata()
-                        .bits();
-                });
-                in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                });
-                self.threads.change(EPDByteState::End);
-                Some(true)
-            },
-            EPDByteState::End => {
-                Some(true)
-            },
-        }
-    }
-}
-
 /// Send data array to EPD
 pub enum EPDDataState {
     Init,
@@ -272,7 +199,7 @@ pub struct EPDData<const LEN: usize>{
 
 impl <const LEN: usize> AsyncOperation for EPDData<LEN> {
     type Init = ();
-    type Input<'a> = &'a [u8];
+    type Input<'a> = &'a [u8; LEN];
     type Output = Option<bool>;
 
     fn new(_: Self::Init) -> Self {
@@ -351,12 +278,12 @@ impl <const LEN: usize> AsyncOperation for EPDData<LEN> {
 pub struct EPDDataBuffer<const LEN: usize>{
     threads: Threads<EPDDataState, 1>,
     position: usize,
-    position_borders: Option<[usize; 4]>,
+    position_borders: Option<[usize;3]>,
 }
 
 impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
-    type Init = Option<(u8, u8, u16, u16)>; // Borders of 2D array
-    type Input<'a> = &'a [u8];
+    type Init = Option<Bounds>; // Borders of 2D array
+    type Input<'a> = &'a [u8; LEN];
     type Output = Option<bool>;
 
     fn new(addresses: Self::Init) -> Self {
@@ -369,9 +296,11 @@ impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
                 let x_end_position = b.1 as usize;
                 let y_start_position = (SCREEN_SIZE_X - 1) as usize - b.2 as usize; //Y coordinates inversed for some reason
                 let y_end_position = (SCREEN_SIZE_X - 1) as usize - b.3 as usize;
+
+                let end_position = X_ADDRESS_WIDTH * y_end_position + x_end_position;
                 (
                     y_start_position * X_ADDRESS_WIDTH as usize + x_start_position,
-                    Some([x_start_position, x_end_position, y_start_position, y_end_position]),
+                    Some([x_start_position, x_end_position, end_position]),
                 )
             }
         };
@@ -440,12 +369,12 @@ impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
                         }
                     },
                     Some(b) => {
-                        if self.position < X_ADDRESS_WIDTH * b[3] + b[1] {
-                            let y_position = self.position / X_ADDRESS_WIDTH;
-                            let x_position = self.position - y_position * X_ADDRESS_WIDTH;
+                        if self.position < b[2] {
+                            let x_position = self.position % X_ADDRESS_WIDTH;
 
                             self.threads.change(EPDDataState::Send);
                             if x_position >= b[1] {
+                                let y_position = self.position / X_ADDRESS_WIDTH;
                                 self.position = (y_position + 1) * X_ADDRESS_WIDTH + b[0];
                                 return None // unblock thread
                             } else {

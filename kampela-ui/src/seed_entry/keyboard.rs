@@ -114,10 +114,10 @@ impl Keyboard {
 }
 
 impl View for Keyboard {
-    type DrawInput<'a> = bool;
+    type DrawInput<'a> = (bool, bool);
     type DrawOutput = Option<Rectangle>;
     type TapInput<'a> = ();
-    type TapOutput = Option<Vec<char>>;
+    type TapOutput = Option<(Vec<char>, Rectangle)>;
 
     fn bounding_box(&self) -> Rectangle {
         KEYBOARD_WIDGET.bounding_box()
@@ -127,14 +127,14 @@ impl View for Keyboard {
         KEYBOARD_WIDGET.bounding_box_absolute()
     }
 
-    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, n: Self::DrawInput<'_>) -> Result<Self::DrawOutput,D::Error>
+    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, (t, n): Self::DrawInput<'_>) -> Result<Self::DrawOutput,D::Error>
         where 
             D: DrawTarget<Color = BinaryColor>,
             Self: 'a,
         {
         let mut was_tapped = None;
         for key in self.keys.iter_mut() {
-            if key.draw(target, n)? {
+            if key.draw(target, (t, n))? {
                 was_tapped = Some(key.bounding_box_absolut());
             }
         }
@@ -145,9 +145,12 @@ impl View for Keyboard {
         where Self: 'a
     {
         let mut nearest = Vec::new();
-
+        let mut rectangle = SCREEN_AREA;
         for key in self.keys.iter_mut() {
-            key.handle_tap(p, ());
+            if key.handle_tap(p, ()).is_some() {
+                rectangle = key.bounding_box_absolut();
+            };
+            
             let b = &key.bounding_box();
             
             //calculating square(to avoid sqrt) of distance to edge or vertex of bounding box
@@ -179,7 +182,7 @@ impl View for Keyboard {
             //if neither key is pressed
             None
         } else {
-            Some(nearest.iter_mut().map(|k| k.0).collect())
+            Some((nearest.iter_mut().map(|k| k.0).collect(), rectangle))
         }
     }
 }

@@ -13,25 +13,19 @@ use kampela_display_common::display_def::*;
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 
 use crate::{
-    in_free,
     devices::{
         display::{
-            UpdateFull,
-            UpdateFast,
-            UpdateUltraFast,
-            Request
+            Bounds, PartMode, Request, UpdateFast, UpdateFull, UpdateUltraFast
         },
         touch::{disable_touch_int, enable_touch_int}
-    },
-    parallel::{Threads, AsyncOperation}
+    }, parallel::{AsyncOperation, Threads}
 };
-use crate::devices::display_transmission::epaper_deep_sleep;
 use crate::debug_display::epaper_draw_stuff_differently;
 
 const SCREEN_SIZE_VALUE: usize = (SCREEN_SIZE_X*SCREEN_SIZE_Y) as usize;
 
 // x and y of framebuffer and display RAM address are inversed
-fn refreshable_area_address(refreshable_area: Rectangle) -> (u8, u8, u16, u16) {
+fn refreshable_area_address(refreshable_area: Rectangle) -> Bounds {
     let x_start_address: u8 = if refreshable_area.top_left.y < 0 {
         0
     } else if refreshable_area.top_left.y > (SCREEN_SIZE_Y - 1) as i32 {
@@ -40,22 +34,22 @@ fn refreshable_area_address(refreshable_area: Rectangle) -> (u8, u8, u16, u16) {
         (refreshable_area.top_left.y / 8) as u8
     };
 
-    let y_start_address: u16 = if refreshable_area.top_left.x < 0 {
-        (SCREEN_SIZE_X - 1) as u16
+    let y_start_address: u16 = if refreshable_area.top_left.x < 0 {  // should it be offsetted by -1?
+        (SCREEN_SIZE_X) as u16
     } else if refreshable_area.top_left.x > (SCREEN_SIZE_X - 1) as i32{
         0
     } else {
-        ((SCREEN_SIZE_X - 1) as i32 - refreshable_area.top_left.x) as u16
+        ((SCREEN_SIZE_X) as i32 - refreshable_area.top_left.x) as u16
     };
 
-    let bottom_right = refreshable_area.top_left + refreshable_area.size;
+    let bottom_right = refreshable_area.top_left + refreshable_area.size - Point{x: 1, y: 1};
     
     let x_end_address: u8 = if bottom_right.y > (SCREEN_SIZE_Y - 1) as i32 {
         (SCREEN_SIZE_Y / 8 - 1) as u8
     } else if bottom_right.y < 0 {
         0
     } else {
-        ((bottom_right.y / 8 + (bottom_right.y % 8).signum()) - 1) as u8
+        (bottom_right.y / 8) as u8
     };
 
     let y_end_address: u16 = if bottom_right.x > (SCREEN_SIZE_X - 1) as i32 {
@@ -63,7 +57,7 @@ fn refreshable_area_address(refreshable_area: Rectangle) -> (u8, u8, u16, u16) {
     } else if bottom_right.x < 0 {
         (SCREEN_SIZE_X - 1) as u16
     } else {
-        (SCREEN_SIZE_X as i32 - bottom_right.x) as u16
+        ((SCREEN_SIZE_X - 1) as i32 - bottom_right.x) as u16
     };
 
     (x_start_address, x_end_address, y_start_address, y_end_address)
@@ -121,7 +115,7 @@ impl DisplayOperationThreads {
         self.wind(DisplayState::FullOperating(None));
     }
 
-    /// Start partial fast display update sequence
+    /// Start fast display update sequence
     pub fn request_fast(&mut self) {
         if self.is_any_running() {
             panic!("more than one request at a time");
@@ -129,13 +123,30 @@ impl DisplayOperationThreads {
         self.wind(DisplayState::FastOperating(None));
     }
 
-    /// Start partial fast display update sequence
-    pub fn request_ultrafast(&mut self, area: Option<Rectangle>) {
+    /// Start Ultrafast display update sequence
+    pub fn request_ultrafast(&mut self) {
         if self.is_any_running() {
             panic!("more than one request at a time");
         }
-        let d: Option<(u8, u8, u16, u16)> = area.map(|r| refreshable_area_address(r));
-        self.wind(DisplayState::UltraFastOperating((None, d)));
+        self.wind(DisplayState::UltraFastOperating((None, None)));
+    }
+
+    /// Start part display update sequence with black draw
+    pub fn request_part_black(&mut self, area: Option<Rectangle>) {
+        if self.is_any_running() {
+            panic!("more than one request at a time");
+        }
+        let part_options = area.map(|r| (refreshable_area_address(r), PartMode::PartBlack));
+        self.wind(DisplayState::UltraFastOperating((None, part_options)));
+    }
+
+    /// Start part display update sequence with white draw
+    pub fn request_part_white(&mut self, area: Option<Rectangle>) {
+        if self.is_any_running() {
+            panic!("more than one request at a time");
+        }
+        let part_options = area.map(|r| (refreshable_area_address(r), PartMode::PartWhite));
+        self.wind(DisplayState::UltraFastOperating((None, part_options)));
     }
 }
 
@@ -167,7 +178,7 @@ pub enum DisplayState {
     /// Fast update was requested; waiting for power
     FastOperating(Option<Request<UpdateFast>>),
     /// Part update was requested; waiting for power
-    UltraFastOperating((Option<Request<UpdateUltraFast>>, Option<(u8, u8, u16, u16)>)),
+    UltraFastOperating((Option<Request<UpdateUltraFast>>, Option<(Bounds, PartMode)>)),
     /// Display not available due to update cycle
     UpdatingNow,
 }
@@ -227,12 +238,12 @@ impl AsyncOperation for FrameBuffer {
                     }
                 }
             },
-            DisplayState::UltraFastOperating((state, bounds)) => {
+            DisplayState::UltraFastOperating((state, part_options)) => {
                 match state {
                     None => {
                         if voltage > PART_REFRESH_POWER {
-                            let b = bounds.take();
-                            threads.change(DisplayState::UltraFastOperating((Some(Request::<UpdateUltraFast>::new(b)), None)));
+                            let p = part_options.take();
+                            threads.change(DisplayState::UltraFastOperating((Some(Request::<UpdateUltraFast>::new(p)), None)));
                         }
                         None
                     },
@@ -248,7 +259,6 @@ impl AsyncOperation for FrameBuffer {
                 }
             },
             DisplayState::UpdatingNow => {
-                in_free(|peripherals| epaper_deep_sleep(peripherals));
                 threads.sync();
                 enable_touch_int();
                 Some(true)

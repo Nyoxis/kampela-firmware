@@ -33,7 +33,6 @@ enum KeyboardState {
     Initial,
     Tapped,
     DrawTapped,
-    InitialInverse,
 }
 
 pub struct SeedEntry<P> where
@@ -47,7 +46,6 @@ pub struct SeedEntry<P> where
     navbar_entry: NavBar,
     navbar_phrase: NavBar,
     tapped: KeyboardState,
-    negative: bool,
 }
 
 impl<P: Platform> SeedEntry<P> {
@@ -64,7 +62,6 @@ impl<P: Platform> SeedEntry<P> {
             navbar_entry: NavBar::new(("clear", "")),
             navbar_phrase: NavBar::new(("back", "")),
             tapped: KeyboardState::Initial,
-            negative: false,
         };
         Self::update_navbar_phrase(&mut state);
         state
@@ -81,24 +78,13 @@ impl<P: Platform> SeedEntry<P> {
         match self.tapped {
             KeyboardState::Initial => false,
             KeyboardState::Tapped => {
-                if self.negative {
-                    self.tapped = KeyboardState::InitialInverse;
-                } else {
-                    self.tapped = KeyboardState::DrawTapped;
-                }
-                self.negative = !self.negative;
+                self.tapped = KeyboardState::DrawTapped;
                 true
             },
             KeyboardState::DrawTapped => {
                 self.tapped = KeyboardState::Initial;
-                self.negative = false;
                 false
             },
-            KeyboardState::InitialInverse => {
-                self.tapped = KeyboardState::DrawTapped;
-                self.negative = true;
-                false
-            }
         }
     }
     fn update_navbar_phrase(&mut self) {
@@ -126,32 +112,26 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
         
         let t = self.switch_tapped();
 
-        let filled = if self.negative {
-            PrimitiveStyle::with_fill(BinaryColor::On)
-        } else {
-            PrimitiveStyle::with_fill(BinaryColor::Off)
-        };
-        target.bounding_box().into_styled(filled).draw(target)?;
+        target.bounding_box().into_styled(PrimitiveStyle::with_fill(BinaryColor::Off)).draw(target)?;
 
-        self.remove.draw(target, self.negative)?;
-        self.keyboard.draw(target, self.negative)?;
+        self.remove.draw(target, (t, false))?;
+        self.keyboard.draw(target, (t, false))?;
 
-        if self.entry.is_empty() {
-            self.phrase.draw(target, self.negative)?;
-            self.navbar_phrase.draw(target, self.negative)?;
-        } else {
-            self.entry.draw(target, self.negative)?;
-            self.proposal.draw(target, (t, self.negative))?;
-            self.navbar_entry.draw(target, self.negative)?;
+        if matches!(self.tapped, KeyboardState::Initial) {
+            if self.entry.is_empty() {
+                self.phrase.draw(target, false)?;
+                self.navbar_phrase.draw(target, false)?;
+            } else {
+                self.entry.draw(target, false)?;
+                self.proposal.draw(target, false)?;
+                self.navbar_entry.draw(target, false)?;
+            }
         }
 
-        match self.tapped {
-            KeyboardState::DrawTapped |
-            KeyboardState::InitialInverse => {
-                request = Some(UpdateRequest::UltraFast);
-            },
-            _ => {},
+        if matches!(self.tapped, KeyboardState::DrawTapped) {
+            request = Some(UpdateRequest::UltraFast);
         }
+        
         Ok((EventResult { request, state }, ()))
     }
 
@@ -162,7 +142,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
         let mut state = None;
         let mut request = None;
 
-        if let Some(Some(c)) = self.keyboard.handle_tap(point, ()) {
+        if let Some(Some((c, r))) = self.keyboard.handle_tap(point, ()) {
             if !self.phrase.is_maxed() {
                 if !self.entry.is_maxed() {
                     self.entry.add_letter(c[0]);
@@ -174,7 +154,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.phrase.set_invalid();
             }
             self.tapped = KeyboardState::Tapped;
-            request = Some(UpdateRequest::UltraFast);
+            request = Some(UpdateRequest::PartBlack(r));
         };
 
         if self.entry.is_empty() && matches!(self.tapped, KeyboardState::Initial) {
@@ -182,7 +162,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.phrase.remove_word();
                 self.update_navbar_phrase();
                 self.tapped = KeyboardState::Tapped;
-                request = Some(UpdateRequest::UltraFast);
+                request = Some(UpdateRequest::PartWhite(self.remove.bounding_box_absolut()));
             }
         }
         if !self.entry.is_empty() {
@@ -190,7 +170,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.proposal.remove_letter();
                 self.entry.remove_letter();
                 self.tapped = KeyboardState::Tapped;
-                request = Some(UpdateRequest::UltraFast);
+                request = Some(UpdateRequest::PartWhite(self.remove.bounding_box_absolut()));
             }
         }
         if let Some(Some(guess)) = self.proposal.handle_tap(point, ()) {

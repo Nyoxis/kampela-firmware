@@ -78,7 +78,6 @@ pub struct Proposal<P> where
     entered_count: usize,
     variants: Vec<String>,
     guess: Vec<WordListElement<P::AsWordList>>,
-    guess_depth: usize,
     wordlist: P::AsWordList,
 }
 
@@ -89,7 +88,6 @@ impl<P: Platform> Proposal<P> {
             entered_count: 0,
             variants: Vec::new(),
             guess: Vec::new(),
-            guess_depth: 0,
             wordlist,
         }
     }
@@ -99,7 +97,6 @@ impl<P: Platform> Proposal<P> {
         self.entered_count = 0;
         self.variants = Vec::new();
         self.guess = Vec::new();
-        self.guess_depth = 0;
     }
     pub fn add_letters(&mut self, letters: Vec<char>) {
         if self.entered.len() < ENOUGH_LEN {
@@ -125,7 +122,7 @@ impl<P: Platform> Proposal<P> {
 
     fn make_guess(&mut self) {
         let mut guess = Vec::<WordListElement<P::AsWordList>>::new();
-        if self.variants.len() < 4 {
+        if self.variants.len() <= MAX_PROPOSAL {
             self.variants = Vec::new();
         }
         let variants = Variants::new(&self.entered, &self.variants);
@@ -156,7 +153,7 @@ impl<P: Platform> Proposal<P> {
 }
 
 impl<P: Platform> View for Proposal<P> {
-    type DrawInput<'a> = (bool, bool) where P: 'a;
+    type DrawInput<'a> = bool where P: 'a;
     type DrawOutput = ();
     type TapInput<'a> = () where P: 'a;
     type TapOutput = Option<WordListElement<P::AsWordList>>;
@@ -169,48 +166,43 @@ impl<P: Platform> View for Proposal<P> {
         PROPOSAL_WIDGET.bounding_box_absolute()
     }
 
-    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, (t, n): Self::DrawInput<'a>) -> Result<(), D::Error>
+    fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, n: Self::DrawInput<'a>) -> Result<(), D::Error>
         where 
             D: DrawTarget<Color = BinaryColor>,
             Self: 'a,
         {
 
-        if t == false {
-            let (on, _) = if n {
-                (BinaryColor::Off, BinaryColor::On)
-            } else {
-                (BinaryColor::On, BinaryColor::Off)
+        let (on, _) = if n {
+            (BinaryColor::Off, BinaryColor::On)
+        } else {
+            (BinaryColor::On, BinaryColor::Off)
+        };
+
+        self.make_guess();
+
+        let character_style = MonoTextStyleBuilder::new()
+            .font(&PROPOSAL_FONT)
+            .text_color(on)
+            .underline()
+            .build();
+
+        let textbox_style = TextBoxStyleBuilder::new()
+            .alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Middle)
+            .build();
+        for (i, section) in PROPOSAL_SECTIONS.iter().enumerate() {
+            let text = match self.guess.get(i) {
+                Some(w) => {
+                    w.word.as_ref()
+                },
+                None => "",
             };
-
-            if self.guess_depth != self.entered.len() { // to guess only first draw in row
-                self.guess_depth = self.entered.len();
-                self.make_guess();
-            }
-    
-            let character_style = MonoTextStyleBuilder::new()
-                .font(&PROPOSAL_FONT)
-                .text_color(on)
-                .underline()
-                .build();
-
-            let textbox_style = TextBoxStyleBuilder::new()
-                .alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Middle)
-                .build();
-            for (i, section) in PROPOSAL_SECTIONS.iter().enumerate() {
-                let text = match self.guess.get(i) {
-                    Some(w) => {
-                        w.word.as_ref()
-                    },
-                    None => "",
-                };
-                TextBox::with_textbox_style(
-                    &text,
-                    *section,
-                    character_style,
-                    textbox_style,
-                ).draw(target)?;
-            }
+            TextBox::with_textbox_style(
+                &text,
+                *section,
+                character_style,
+                textbox_style,
+            ).draw(target)?;
         }
 
         Ok(())
