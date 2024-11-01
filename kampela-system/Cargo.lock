@@ -445,6 +445,7 @@ dependencies = [
  "embedded-text",
  "external-memory-tools",
  "kampela-display-common",
+ "kampela-ui",
  "lazy_static",
  "lt-codes",
  "mnemonic-external",
@@ -453,6 +454,22 @@ dependencies = [
  "qrcodegen-no-heap",
  "rand_core",
  "scale-info",
+ "substrate-crypto-light",
+ "substrate_parser",
+]
+
+[[package]]
+name = "kampela-ui"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-text",
+ "hex",
+ "kampela-display-common",
+ "lazy_static",
+ "mnemonic-external",
+ "qrcodegen-no-heap",
+ "rand",
  "substrate-crypto-light",
  "substrate_parser",
 ]

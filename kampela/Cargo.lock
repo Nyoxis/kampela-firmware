@@ -500,6 +500,7 @@ dependencies = [
  "embedded-text",
  "external-memory-tools",
  "kampela-display-common",
+ "kampela-ui",
  "lazy_static",
  "lt-codes",
  "mnemonic-external",

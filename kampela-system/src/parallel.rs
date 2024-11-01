@@ -1,8 +1,4 @@
 //! Asynchronous operation generic code
-#[cfg(not(feature="std"))]
-use alloc::vec::Vec;
-#[cfg(feature="std")]
-use std::vec::Vec;
 use core::array;
 
 use efm32pg23_fix::SYST;
@@ -137,26 +133,52 @@ impl<StateEnum, const CAPACITY: usize> Threads<StateEnum, CAPACITY> where
     }
 
     /// Mark end state of current thread
-    pub fn sync(&mut self) {
-        if self.active & (1 << self.index) != 0 {
-            self.threads_pool[self.index] = StateEnum::default();
+    fn sync_any(&mut self, index: usize) {
+        if self.active & (1 << index) != 0 {
+            self.threads_pool[index] = StateEnum::default();
 
-            for i in self.index..self.active_len() - 1 {
+            for i in index..self.active_len() - 1 {
                 self.threads_pool.swap(i, i +1);
             }
-            let masked = self.active & !usize::MAX.overflowing_shl(self.index as u32).0;
-            self.active = masked | self.active.overflowing_shr(1).0 & usize::MAX.overflowing_shl(self.index as u32).0;
+            let masked = self.active & !usize::MAX.overflowing_shl(index as u32).0;
+            self.active = masked | self.active.overflowing_shr(1).0 & usize::MAX.overflowing_shl(index as u32).0;
             
             // to preserve order
-            self.repeat = true;
+            if index == self.index {
+                self.repeat = true;
+            }
             if self.index >= self.active_len() {
                 self.index = 0;
             }
         }
     }
+    pub fn sync(&mut self) {
+        self.sync_any(self.index);
+    }
 
     pub fn hold(&mut self) {
         self.repeat = true;
+    }
+    /// Ends mathced thread, make sure thread is safe to terminate, true if success, false if not found
+    pub fn try_terminate<F: Fn (&StateEnum) -> bool>(&mut self, condition: F) -> bool {
+        let mut index_to_terminate = None;
+        for (index, thread) in self.threads_pool.iter().enumerate() {
+            if condition(thread) {
+                index_to_terminate = Some(index);
+            }
+        }
+        if let Some(i) = index_to_terminate {
+            self.sync_any(i);
+        }
+        true
+    }
+
+    /// Uses closure on every running thread, make sure the thread is safe to change from outside, match thread first
+    pub fn try_change<F: Fn(&mut StateEnum)>(&mut self, closure: F) -> bool {
+        for thread in self.threads_pool.iter_mut() {
+            closure(thread)
+        }
+        true
     }
 
     /// Returns true until all matched treads are running

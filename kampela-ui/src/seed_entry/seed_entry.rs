@@ -111,8 +111,9 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
         let mut request = None;
         
         let t = self.switch_tapped();
-
-        target.bounding_box().into_styled(PrimitiveStyle::with_fill(BinaryColor::Off)).draw(target)?;
+        if !t {
+            target.bounding_box().into_styled(PrimitiveStyle::with_fill(BinaryColor::Off)).draw(target)?;
+        }
 
         self.remove.draw(target, (t, false))?;
         self.keyboard.draw(target, (t, false))?;
@@ -129,7 +130,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
         }
 
         if matches!(self.tapped, KeyboardState::DrawTapped) {
-            request = Some(UpdateRequest::UltraFast);
+            request = Some(UpdateRequest::UltraFastSelective);
         }
         
         Ok((EventResult { request, state }, ()))
@@ -154,7 +155,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.phrase.set_invalid();
             }
             self.tapped = KeyboardState::Tapped;
-            request = Some(UpdateRequest::PartBlack(r));
+            request = Some(UpdateRequest::Part(r));
         };
 
         if self.entry.is_empty() && matches!(self.tapped, KeyboardState::Initial) {
@@ -162,7 +163,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.phrase.remove_word();
                 self.update_navbar_phrase();
                 self.tapped = KeyboardState::Tapped;
-                request = Some(UpdateRequest::PartWhite(self.remove.bounding_box_absolut()));
+                request = Some(UpdateRequest::Part(self.remove.bounding_box_absolut()));
             }
         }
         if !self.entry.is_empty() {
@@ -170,14 +171,14 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
                 self.proposal.remove_letter();
                 self.entry.remove_letter();
                 self.tapped = KeyboardState::Tapped;
-                request = Some(UpdateRequest::PartWhite(self.remove.bounding_box_absolut()));
+                request = Some(UpdateRequest::Part(self.remove.bounding_box_absolut()));
             }
         }
         if let Some(Some(guess)) = self.proposal.handle_tap(point, ()) {
             self.phrase.add_word(guess);
             self.entry.clear();
             self.update_navbar_phrase();
-            request = Some(UpdateRequest::Fast);
+            request = Some(UpdateRequest::UltraFastSelective);
         }
         if self.entry.is_empty() {
             if let Some(Some(c)) = self.navbar_phrase.handle_tap(point, ()) {
@@ -221,7 +222,7 @@ impl<P: Platform> ViewScreen for SeedEntry<P> {
             if matches!(self.navbar_entry.handle_tap(point, ()), Some(Some(NavCommand::Left))) {
                 self.entry.clear();
                 self.proposal.clear();
-                request = Some(UpdateRequest::Fast);
+                request = Some(UpdateRequest::UltraFastSelective);
             }
         }
 

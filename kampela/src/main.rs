@@ -210,7 +210,7 @@ impl<'a> AsyncOperation for MainState<'a> {
         // initialize SYST for Timer
         free(|cs| {  
             let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
-            
+            core_periph.SYST.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
             core_periph.SYST.set_reload(SYST::get_ticks_per_10ms());
             core_periph.SYST.clear_current();
             core_periph.SYST.enable_counter();

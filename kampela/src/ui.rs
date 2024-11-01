@@ -25,10 +25,10 @@ pub struct UI {
     update_request: Option<UpdateRequest>,
 }
 
-pub struct UIOperationThreads(Threads<UIStatus, 1>);
+pub struct UIOperationThreads(Threads<UIStatus, 2>);
 
 impl core::ops::Deref for UIOperationThreads {
-    type Target = Threads<UIStatus, 1>;
+    type Target = Threads<UIStatus, 2>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -43,7 +43,7 @@ impl core::ops::DerefMut for UIOperationThreads {
 
 impl UIOperationThreads {
     pub fn new() -> Self {
-        Self(Threads::from([]))
+        Self(Threads::new(UIStatus::DisplayOperation(DisplayOperationThreads::new())))
     }
 }
 
@@ -57,17 +57,16 @@ impl UI {
             let is_clear_update = matches!(u, UpdateRequest::Slow) || matches!(u, UpdateRequest::Fast);
             self.update_request.propagate(self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented"));
 
-            let mut display_operation_threads = DisplayOperationThreads::new();
-            match u {
-                UpdateRequest::Hidden => (),
-                UpdateRequest::Slow => display_operation_threads.request_full(),
-                UpdateRequest::Fast => display_operation_threads.request_fast(),
-                UpdateRequest::UltraFast => display_operation_threads.request_ultrafast(),
-                UpdateRequest::PartBlack(a) => display_operation_threads.request_part_black(Some(a)),
-                UpdateRequest::PartWhite(a) => display_operation_threads.request_part_white(Some(a)),
-            }
             if !matches!(u, UpdateRequest::Hidden) {
-                threads.wind(UIStatus::DisplayOperation(display_operation_threads));
+                threads.try_change(|s| {
+                    match s {
+                        UIStatus::DisplayOperation(state) => {
+                            state.add_to_queue(u.clone());
+                        },
+                        _ => {}
+                    }
+                });
+                threads.sync();
             }
             None
         } else {
@@ -117,7 +116,12 @@ impl AsyncOperation for UI {
             UIStatus::DisplayOperation(t) => {
                 let r = self.state.display.advance((voltage, t));
                 if r == Some(true) {
-                    threads.sync();
+                    if !t.queue_is_empty() {
+                        return r
+                    }
+                    if !threads.is_other_running() {
+                        threads.wind(UIStatus::Listen)
+                    }
                 }
                 r
             },

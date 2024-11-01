@@ -15,7 +15,6 @@ use embedded_graphics::{
         PrimitiveStyleBuilder,
         Rectangle,
         RoundedRectangle,
-        StrokeAlignment
     },
     Drawable
 };
@@ -77,6 +76,7 @@ impl View for Key {
         if self.this_tapped {
             was_tapped = true;
             self.draw_tapped(target, n)?;
+            self.draw_initial(target, !n)?;
         }
         Ok(was_tapped)
     }
@@ -124,17 +124,15 @@ impl Key {
             (BinaryColor::On, BinaryColor::Off)
         };
         self.this_tapped = false;
-        let thin_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(on)
-            .stroke_width(2)
-            .stroke_alignment(StrokeAlignment::Inside)
+        let flll = PrimitiveStyleBuilder::new()
+            .fill_color(on)
             .build();
         let area = self.bounding_box_view();
         let rounded = RoundedRectangle::new(
             area,
             CornerRadii::new(Size::new(KEY_RADIUS, KEY_RADIUS))
         );
-        rounded.into_styled(thin_stroke).draw(target)?;
+        rounded.into_styled(flll).draw(target)?;
 
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! This is simulator to develop Kampela UI mocks
 #![deny(unused_crate_dependencies)]
 use embedded_graphics_core::{
-    pixelcolor::BinaryColor, primitives::{PointsIter, Rectangle}, Drawable, Pixel
+    pixelcolor::BinaryColor, prelude::Point, primitives::{PointsIter, Rectangle}, Drawable, Pixel
 };
 
 use embedded_graphics_simulator::{
@@ -271,15 +271,15 @@ fn main() {
                     println!("ultrafast update");
                     sleep(ULTRAFAST_UPDATE_TIME);
                 },
-                UpdateRequest::PartBlack(ref a) => {
-                    draw_black_ontop(&mut previous, &state.display, a);
+                UpdateRequest::UltraFastSelective => {
+                    draw_selective(&mut previous, &state.display, None);
                     state.display = previous;
                     window.update(&state.display);
-                    println!("part update with black of area {:?}", a);
+                    println!("ultrafast selective update");
                     sleep(ULTRAFAST_UPDATE_TIME);
                 },
-                UpdateRequest::PartWhite(ref a) => {
-                    draw_white_ontop(&mut previous, &state.display, a);
+                UpdateRequest::Part(ref a) => {
+                    draw_selective(&mut previous, &state.display, Some(a));
                     state.display = previous;
                     window.update(&state.display);
                     println!("part update with white of area {:?}", a);
@@ -315,25 +315,54 @@ fn main() {
 
 fn invert_display(display: &mut SimulatorDisplay<BinaryColor>) {
     for point in SCREEN_AREA.points() {
-        let dot = Pixel::<BinaryColor>(point, display.get_pixel(point).invert());
-        dot.draw(display).unwrap();
+        let pixel = Pixel::<BinaryColor>(point, display.get_pixel(point).invert());
+        pixel.draw(display).unwrap();
     };
 }
 
-fn draw_black_ontop(display: &mut SimulatorDisplay<BinaryColor>, new_display: &SimulatorDisplay<BinaryColor>, area: &Rectangle) {
-    for point in area.points() {
-        let dot = Pixel::<BinaryColor>(point, new_display.get_pixel(point));
-        if dot.1.is_on() {
-            dot.draw(display).unwrap();
-        }
+fn draw_selective(display: &mut SimulatorDisplay<BinaryColor>, new_display: &SimulatorDisplay<BinaryColor>, area: Option<&Rectangle>) {
+    // simulate partial write window
+    let mut area = area.unwrap_or(&SCREEN_AREA).clone();
+    area.top_left.y = if area.top_left.y < 0 {
+        0
+    } else if area.top_left.y > (SCREEN_SIZE_Y - 1) as i32 {
+        (SCREEN_SIZE_Y as i32 / 8 - 1) * 8
+    } else {
+        (area.top_left.y / 8) * 8
     };
-}
 
-fn draw_white_ontop(display: &mut SimulatorDisplay<BinaryColor>, new_display: &SimulatorDisplay<BinaryColor>, area: &Rectangle) {
+    area.top_left.x = if area.top_left.x < 0 {
+        0
+    } else if area.top_left.x > (SCREEN_SIZE_X - 1) as i32{
+        SCREEN_SIZE_X as i32 - 1
+    } else {
+        area.top_left.x
+    };
+
+    let bottom_right = area.top_left + area.size - Point{x: 1, y: 1};
+    
+    area.size.height = if bottom_right.y > (SCREEN_SIZE_Y - 1) as i32 {
+        (SCREEN_SIZE_Y as u32 / 8) * 8 - area.top_left.y as u32
+    } else if bottom_right.y < 0 {
+        0
+    } else {
+        (bottom_right.y as u32 / 8 + 1) * 8 - area.top_left.y as u32
+    };
+
+    area.size.width = if bottom_right.x > (SCREEN_SIZE_X - 1) as i32 {
+        (SCREEN_SIZE_X as u32) - area.top_left.x as u32
+    } else if bottom_right.x < 0 {
+        0
+    } else {
+        (bottom_right.x as u32 + 1) - area.top_left.x as u32
+    };
+    // simulate selective update mode
     for point in area.points() {
-        let dot = Pixel::<BinaryColor>(point, new_display.get_pixel(point));
-        if dot.1.is_off() {
-            dot.draw(display).unwrap();
+        let pixel = Pixel::<BinaryColor>(point, new_display.get_pixel(point));
+        let old_pixel = Pixel::<BinaryColor>(point, display.get_pixel(point));
+        if (pixel.1.is_on() && old_pixel.1.is_off()) ||
+        (pixel.1.is_off() && old_pixel.1.is_on()) {
+            pixel.draw(display).unwrap();
         }
     };
 }
