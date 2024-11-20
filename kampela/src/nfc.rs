@@ -7,6 +7,7 @@ use kampela_system::{
     PERIPHERALS, in_free, BUF_THIRD, CH_TIM0,
 };
 use cortex_m::interrupt::free;
+use substrate_crypto_light::sr25519::{Public, PUBLIC_LEN};
 use crate::BUFFER_STATUS;
 use efm32pg23_fix::{NVIC,Interrupt};
 
@@ -302,11 +303,11 @@ pub struct NfcReceiver <'a> {
     buffer: &'a [u16; 3*BUF_THIRD],
     collector: NfcCollector,
     state: NfcState,
-    public_memory: [u8; 32],
+    public_memory: Public,
 }
 
 impl <'a> NfcReceiver<'a> {
-    pub fn new(nfc_buffer: &'a [u16; 3*BUF_THIRD], public_memory: Option<[u8; 32]>) -> Self {
+    pub fn new(nfc_buffer: &'a [u16; 3*BUF_THIRD], public_memory: Option<Public>) -> Self {
         match public_memory {
             Some(a) => Self {
                 buffer: nfc_buffer,
@@ -319,7 +320,7 @@ impl <'a> NfcReceiver<'a> {
                     buffer: nfc_buffer,
                     collector: NfcCollector::new(),
                     state: NfcState::Done,
-                    public_memory: [0u8; 32],
+                    public_memory: Public{0: [0u8; PUBLIC_LEN]},
             },
         }
     }
@@ -406,7 +407,7 @@ impl <'a> NfcReceiver<'a> {
                                 return Some(Err(NfcError::InvalidAddress))
                             },
                             Some(k) => {
-                                if k != self.public_memory {
+                                if k != self.public_memory.0 {
                                     return Some(Err(NfcError::InvalidAddress))
                                 }
                             }

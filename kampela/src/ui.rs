@@ -1,12 +1,12 @@
 //! Everything high-level related to interfacing with user
-use alloc::{borrow::ToOwned, string::String, vec::Vec};
-use substrate_crypto_light::sr25519::{Pair, Public};
+use alloc::{string::String, vec::Vec};
+use substrate_crypto_light::sr25519::Public;
 
 use kampela_system::{
     devices::{
         flash::{read_encoded_entropy, store_encoded_entopy},
         psram::{psram_decode_call, psram_decode_extension, read_from_psram, PsramAccess},
-        se_aes_gcm::{decode_entropy, encode_entropy, ProtectedPair},
+        se_aes_gcm::{decode_entropy, encode_entropy, Protected},
         se_rng
     },
     draw::{DisplayOperationThreads, FrameBuffer},
@@ -145,19 +145,19 @@ impl Default for UIStatus {
 
 pub struct Hardware {
     pin: PinCode,
-    protected_pair: Option<ProtectedPair>,
+    protected: Option<Protected>,
     address: Option<[u8; 76]>,
     transaction_psram_access: Option<NfcTransactionPsramAccess>,
 }
 
 impl Hardware {
     pub fn new() -> Self {
-        let protected_pair = None;
+        let protected = None;
         let pin_set = false; // TODO query storage
         let pin = [0; 4];
         Self {
             pin,
-            protected_pair,
+            protected,
             address: None,
             transaction_psram_access: None,
         }
@@ -187,31 +187,25 @@ impl Platform for Hardware {
     }
 
     fn store_entropy(&mut self, e: &[u8]) {
-        self.protected_pair = if e.len() != 0 {
+        self.protected = if e.len() != 0 {
             let protected = encode_entropy(e);
-            let public = Pair::from_entropy_and_pwd(&e, "").unwrap().public();
-            let protected_pair = ProtectedPair{protected, public};
-            store_encoded_entopy(&protected_pair);
-            Some(protected_pair)
+            store_encoded_entopy(&protected);
+            Some(protected)
         } else {
             None
         }
     }
 
     fn read_entropy(&mut self) {
-        self.protected_pair = read_encoded_entropy();
+        self.protected = read_encoded_entropy();
     }
 
     fn public(&self) -> Option<Public> {
-        self.protected_pair.as_ref().map(|p| p.public).to_owned()
+        self.pair().map(|p| p.public())
     }
 
     fn entropy(&self) -> Option<Vec<u8>> {
-        if let Some(p) = &self.protected_pair {
-            Some(decode_entropy(&p.protected))
-        } else {
-            None
-        }
+        self.protected.as_ref().map(|p| decode_entropy(p))
     }
 
     fn set_address(&mut self, addr: [u8; 76]) {
@@ -309,4 +303,3 @@ impl Platform for Hardware {
     }
 
 }
-

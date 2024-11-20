@@ -205,7 +205,7 @@ impl<'a> AsyncOperation for MainState<'a> {
     /// Start of UI.
     fn new(nfc_buffer: Self::Init) -> Self {
         let ui = UI::new(());
-        let receiver = NfcReceiver::new(nfc_buffer, ui.state.platform.public().map(|a| a.0));
+        let receiver = NfcReceiver::new(nfc_buffer, ui.state.platform.public());
         
         // initialize SYST for Timer
         free(|cs| {  

@@ -2,7 +2,7 @@
 authors = ["Vera Abramova <abramova.vera@gmail.com>"]
 edition = "2021"
 name = "app"
-version = "0.9.2"
+version = "0.10.0"
 
 [dependencies]
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"]}
@@ -22,4 +22,5 @@ substrate_parser = {git = "https://github.com/Alzymologist/substrate-parser", de
 
 [profile.release]
 codegen-units = 1
+opt-level = 2
 lto = true
