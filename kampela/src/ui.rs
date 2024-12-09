@@ -1,5 +1,5 @@
 //! Everything high-level related to interfacing with user
-use alloc::{string::String, vec::Vec};
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use substrate_crypto_light::sr25519::Public;
 
 use kampela_system::{
@@ -23,6 +23,7 @@ use kampela_ui::{
 pub struct UI {
     pub state: UIState<Hardware, FrameBuffer>,
     update_request: Option<UpdateRequest>,
+    display_threads: DisplayOperationThreads,
 }
 
 pub struct UIOperationThreads(Threads<UIStatus, 2>);
@@ -43,7 +44,7 @@ impl core::ops::DerefMut for UIOperationThreads {
 
 impl UIOperationThreads {
     pub fn new() -> Self {
-        Self(Threads::new(UIStatus::DisplayOperation(DisplayOperationThreads::new())))
+        Self(Threads::new(UIStatus::DisplayOperation))
     }
 }
 
@@ -58,14 +59,11 @@ impl UI {
             self.update_request.propagate(self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented"));
 
             if !matches!(u, UpdateRequest::Hidden) {
-                threads.try_change(|s| {
-                    match s {
-                        UIStatus::DisplayOperation(state) => {
-                            state.add_to_queue(u.clone());
-                        },
-                        _ => {}
-                    }
-                });
+                if threads.is_all_running(&[|s| {
+                    matches!(s, UIStatus::DisplayOperation)
+                }]) {
+                    self.display_threads.try_add_next(u.clone());
+                };
                 threads.sync();
             }
             None
@@ -79,6 +77,10 @@ impl UI {
     }
 
     pub fn handle_transaction(&mut self, transaction: NfcTransactionPsramAccess) {
+        let k = read_from_psram(&transaction.sender_public_key_psram_access);
+        if self.state.platform.public().map(|p| p.0 != *k).unwrap_or(true) {
+            return self.handle_message("Invalid sender address".to_owned());
+        }
         self.state.platform.set_transaction(transaction);
         self.update_request.propagate(self.state.handle_transaction(&mut ()));
     }
@@ -98,14 +100,17 @@ impl AsyncOperation for UI {
         let hardware = Hardware::new();
         let display = FrameBuffer::new_white();
         let state = UIState::new(hardware, display, &mut ());
+
+        let display_threads = DisplayOperationThreads::new();
         return Self {
             state,
             update_request: Some(UpdateRequest::Slow),
+            display_threads
         }
     }
     /// Call in event loop to progress through UI state
     fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
-        match threads.advance_state() {
+        match threads.turn() {
             UIStatus::Listen => {
                 let a = self.listen(threads);
                 if a.unwrap_or(false) {
@@ -113,10 +118,10 @@ impl AsyncOperation for UI {
                 }
                 a
             },
-            UIStatus::DisplayOperation(t) => {
-                let r = self.state.display.advance((voltage, t));
+            UIStatus::DisplayOperation => {
+                let r = self.state.display.advance((voltage, &mut self.display_threads));
                 if r == Some(true) {
-                    if !t.queue_is_empty() {
+                    if self.display_threads.is_pending() {
                         return r
                     }
                     if !threads.is_other_running() {
@@ -137,7 +142,7 @@ pub enum UIStatus {
     /// Event listening state, default
     Listen,
     /// Screen update started
-    DisplayOperation(DisplayOperationThreads),
+    DisplayOperation,
 }
 impl Default for UIStatus {
     fn default() -> Self { UIStatus::Listen }

@@ -8,8 +8,6 @@ use crate::parallel::{AsyncOperation, Threads};
 
 use crate::devices::display::Bounds;
 use kampela_display_common::display_def::*;
-
-pub const BUFSIZE: usize = 5808;
 const X_ADDRESS_WIDTH: usize = (SCREEN_SIZE_Y / 8) as usize;
 
 /// BUSY is on port B, pin [`SPI_BUSY_PIN`].
@@ -101,7 +99,7 @@ pub enum EPDByteState {
     /// State where command is actually sent
     Send,
     /// Receive something to keep protocol running and close connection
-    Aftermath,
+    WaitSend,
     End,
 }
 
@@ -121,10 +119,9 @@ impl <const C: u8> AsyncOperation for EPDCommand<C> {
     }
     
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             EPDByteState::Init => {
                 in_free(|peripherals| {
-                    select_display(&mut peripherals.gpio_s);
                     display_select_command(&mut peripherals.gpio_s);
                 });
                 self.threads.change(EPDByteState::Send);
@@ -142,10 +139,10 @@ impl <const C: u8> AsyncOperation for EPDCommand<C> {
                         .txdata()
                         .write(|w_reg| unsafe { w_reg.txdata().bits(C) })
                 );
-                self.threads.change(EPDByteState::Aftermath);
+                self.threads.change(EPDByteState::WaitSend);
                 Some(false)
             }
-            EPDByteState::Aftermath => {
+            EPDByteState::WaitSend => {
                 if if_in_free(|peripherals|
                     peripherals
                         .usart0_s
@@ -164,9 +161,6 @@ impl <const C: u8> AsyncOperation for EPDCommand<C> {
                         .rxdata()
                         .bits();
                 });
-                in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                });
                 self.threads.change(EPDByteState::End);
                 Some(true)
             },
@@ -182,9 +176,9 @@ pub enum EPDDataState {
     Init,
     /// Send byte
     Send,
-    WaitSend,
     /// Receive something to keep protocol running and close connection
-    Aftermath,
+    WaitSend,
+
     End,
 }
 
@@ -210,10 +204,9 @@ impl <const LEN: usize> AsyncOperation for EPDData<LEN> {
     }
 
     fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    select_display(&mut peripherals.gpio_s);
                     display_select_data(&mut peripherals.gpio_s);
                 });
                 self.threads.change(EPDDataState::Send);
@@ -257,16 +250,9 @@ impl <const LEN: usize> AsyncOperation for EPDData<LEN> {
                     self.position += 1;
                     self.threads.change(EPDDataState::Send);
                 } else {
-                    self.threads.change(EPDDataState::Aftermath);
+                    self.threads.change(EPDDataState::End);
                 }
                 Some(false)
-            },
-            EPDDataState::Aftermath => {
-                in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                });
-                self.threads.change(EPDDataState::End);
-                Some(true)
             },
             EPDDataState::End => {
                 Some(true)
@@ -313,10 +299,9 @@ impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
     }
 
     fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             EPDDataState::Init => {
                 in_free(|peripherals| {
-                    select_display(&mut peripherals.gpio_s);
                     display_select_data(&mut peripherals.gpio_s);
                 });
                 self.threads.change(EPDDataState::Send);
@@ -365,7 +350,7 @@ impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
                                 return None // unblock thread
                             }
                         } else {
-                            self.threads.change(EPDDataState::Aftermath);
+                            self.threads.change(EPDDataState::End);
                         }
                     },
                     Some(b) => {
@@ -381,18 +366,11 @@ impl <const LEN: usize> AsyncOperation for EPDDataBuffer<LEN> {
                                 self.position += 1;
                             }
                         } else {
-                            self.threads.change(EPDDataState::Aftermath);
+                            self.threads.change(EPDDataState::End);
                         }
                     }
                 }
                 Some(false)
-            },
-            EPDDataState::Aftermath => {
-                in_free(|peripherals| {
-                    deselect_display(&mut peripherals.gpio_s);
-                });
-                self.threads.change(EPDDataState::End);
-                Some(true)
             },
             EPDDataState::End => {
                 Some(true)

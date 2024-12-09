@@ -1,13 +1,12 @@
 //! NFC packet collector and decoder
 
 use nfca_parser::frame::Frame;
-use alloc::vec::Vec;
 
 use kampela_system::{
     PERIPHERALS, in_free, BUF_THIRD, CH_TIM0,
 };
 use cortex_m::interrupt::free;
-use substrate_crypto_light::sr25519::{Public, PUBLIC_LEN};
+use substrate_crypto_light::sr25519::PUBLIC_LEN;
 use crate::BUFFER_STATUS;
 use efm32pg23_fix::{NVIC,Interrupt};
 
@@ -271,7 +270,9 @@ pub fn process_nfc_payload(completed_collector: &ExternalData<AddressPsram>) -> 
 */
 }
 
+#[derive(Clone)]
 pub struct NfcTransactionPsramAccess {
+    pub sender_public_key_psram_access: PsramAccess,
     pub call_psram_access: PsramAccess,
     pub extension_psram_access: PsramAccess,
     pub metadata_psram_access: PsramAccess,
@@ -303,25 +304,14 @@ pub struct NfcReceiver <'a> {
     buffer: &'a [u16; 3*BUF_THIRD],
     collector: NfcCollector,
     state: NfcState,
-    public_memory: Public,
 }
 
 impl <'a> NfcReceiver<'a> {
-    pub fn new(nfc_buffer: &'a [u16; 3*BUF_THIRD], public_memory: Option<Public>) -> Self {
-        match public_memory {
-            Some(a) => Self {
-                buffer: nfc_buffer,
-                collector: NfcCollector::new(),
-                state: NfcState::Operational(0),
-                public_memory: a,
-            },
-            None => 
-                Self {
-                    buffer: nfc_buffer,
-                    collector: NfcCollector::new(),
-                    state: NfcState::Done,
-                    public_memory: Public{0: [0u8; PUBLIC_LEN]},
-            },
+    pub fn new(nfc_buffer: &'a [u16; 3*BUF_THIRD]) -> Self {
+        Self {
+            buffer: nfc_buffer,
+            collector: NfcCollector::new(),
+            state: NfcState::Operational(0),
         }
     }
 
@@ -389,31 +379,17 @@ impl <'a> NfcReceiver<'a> {
 
                             let call_to_sign_psram_access = PsramAccess{start_address: call_address_to_sign, total_len: compact_call.compact as usize};
                             let extension_to_sign_psram_access = PsramAccess{start_address: extension_address_to_sign, total_len: extension_len_to_sign};
-                            data_to_sign_psram_access = Some((call_to_sign_psram_access, extension_to_sign_psram_access));
 
                             position = compact_transaction_2.start_next_unit + compact_transaction_2.compact as usize;
-                        });
-                        let (call_to_sign_psram_access, extension_to_sign_psram_access) = data_to_sign_psram_access.unwrap();
 
-                        let mut public_key: Option<Vec<u8>> = None;
-                        in_free(|peripherals| {
                             let start_address = payload.encoded_data.start_address.try_shift(position).unwrap();
-                            let k = psram_read_at_address(peripherals, start_address, 32usize).unwrap();
-                            public_key = Some(k);
+                            let sender_public_key_psram_access = PsramAccess{start_address, total_len: PUBLIC_LEN};
+                            data_to_sign_psram_access = Some((sender_public_key_psram_access, call_to_sign_psram_access, extension_to_sign_psram_access));
                         });
-                        // TODO: check address differently
-                        match public_key {
-                            None => {
-                                return Some(Err(NfcError::InvalidAddress))
-                            },
-                            Some(k) => {
-                                if k != self.public_memory.0 {
-                                    return Some(Err(NfcError::InvalidAddress))
-                                }
-                            }
-                        }
+                        let (sender_public_key_psram_access, call_to_sign_psram_access, extension_to_sign_psram_access) = data_to_sign_psram_access.unwrap();
 
                         return Some(Ok(NfcResult::Transaction(NfcTransactionPsramAccess{
+                            sender_public_key_psram_access,
                             call_psram_access: call_to_sign_psram_access,
                             extension_psram_access: extension_to_sign_psram_access,
                             metadata_psram_access,

@@ -6,7 +6,7 @@
 extern crate alloc;
 extern crate core;
 
-use alloc::{borrow::ToOwned, format};
+use alloc::{borrow::ToOwned, boxed::Box, format};
 use core::{alloc::Layout, cell::RefCell, ops::DerefMut, panic::PanicInfo, ptr::addr_of};
 use cortex_m::{interrupt::{free, Mutex}, asm::delay};
 use cortex_m_rt::{entry, exception, ExceptionFrame};
@@ -23,7 +23,6 @@ use kampela_system::{
     BUF_THIRD, CH_TIM0, LINK_1, LINK_2, LINK_DESCRIPTORS, TIMER0_CC0_ICF, NfcXfer, NfcXferBlock,
 };
 use efm32pg23_fix::{interrupt, Interrupt, Peripherals, NVIC, SYST};
-use kampela_ui::platform::Platform;
 
 mod ui;
 use ui::{UIOperationThreads, UI};
@@ -182,7 +181,7 @@ fn main() -> ! {
 enum MainStatus<'a> {
     ADCProbe,
     NFCRead(NfcReceiver<'a>),
-    Display(Option<UIOperationThreads>),
+    Display(Option<UIOperationThreads>, Box<UI>),
     TouchRead(Option<Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>>),
 }
 
@@ -195,7 +194,7 @@ impl<'a> Default for MainStatus<'a> {
 struct MainState<'a> {
     threads: Threads<MainStatus<'a>, 3>,
     adc: ADC,
-    ui: UI,
+    ui: Option<Box<UI>>,
 }
 
 impl<'a> AsyncOperation for MainState<'a> {
@@ -205,7 +204,7 @@ impl<'a> AsyncOperation for MainState<'a> {
     /// Start of UI.
     fn new(nfc_buffer: Self::Init) -> Self {
         let ui = UI::new(());
-        let receiver = NfcReceiver::new(nfc_buffer, ui.state.platform.public());
+        let receiver = NfcReceiver::new(nfc_buffer);
         
         // initialize SYST for Timer
         free(|cs| {  
@@ -221,13 +220,13 @@ impl<'a> AsyncOperation for MainState<'a> {
                 MainStatus::NFCRead(receiver),
             ]),
             adc: ADC::new(()),
-            ui,
+            ui: Some(Box::new(ui)),
         }
     }
 
     /// Call in event loop to progress through Kampela states
     fn advance(&mut self, _: ()) {
-        match &mut self.threads.advance_state() {
+        match self.threads.turn() {
             MainStatus::ADCProbe => {
                 self.adc.advance(());
             },
@@ -237,20 +236,28 @@ impl<'a> AsyncOperation for MainState<'a> {
                         Err(e) => {
                             match e {
                                 NfcError::InvalidAddress => {
-                                    self.ui.handle_message("Invalid sender address".to_owned())
+                                    if let Some(ref mut u) = self.ui {
+                                        u.handle_message("Invalid sender address".to_owned())
+                                    }
                                 }
                             }
-                            self.threads.change(MainStatus::Display(None));
+                            if let Some(u) = self.ui.take() {
+                                self.threads.change(MainStatus::Display(None, u));
+                            }
                         }
                         Ok(s) => {
                             match s {
                                 NfcStateOutput::Operational(i) => {
                                     if i == 1 {
-                                        self.ui.handle_message("Receiving NFC packets...".to_owned());
+                                        if let Some(ref mut u) = self.ui {
+                                            u.handle_message("Receiving NFC packets...".to_owned());
+                                        }
                                         if !self.threads.is_all_running(&[
-                                            |s| matches!(s, MainStatus::Display(_))
+                                            |s| matches!(s, MainStatus::Display(..))
                                         ]) {
-                                            self.threads.wind(MainStatus::Display(None));
+                                            if let Some(u) = self.ui.take() {
+                                                self.threads.wind(MainStatus::Display(None, u));
+                                            }
                                         };
                                     }
                                 },
@@ -258,16 +265,26 @@ impl<'a> AsyncOperation for MainState<'a> {
                                     match r {
                                         NfcResult::Empty => {
                                             if !self.threads.is_all_running(&[
-                                                |s| matches!(s, MainStatus::Display(_))
+                                                |s| matches!(s, MainStatus::Display(..))
                                             ]) {
-                                                self.threads.wind(MainStatus::Display(None));
+                                                if let Some(u) = self.ui.take() {
+                                                    self.threads.wind(MainStatus::Display(None, u));
+                                                }
                                             };
                                         },
                                         NfcResult::DisplayAddress => {
-                                            self.ui.handle_address([0;76]);
+                                            self.threads.try_change_any(|status| {
+                                                if let MainStatus::Display(_, ui) = status {
+                                                    ui.handle_address([0;76]);
+                                                }
+                                            });
                                         },
                                         NfcResult::Transaction(transaction) => {
-                                            self.ui.handle_transaction(transaction);
+                                            self.threads.try_change_any(|status| {
+                                                if let MainStatus::Display(_, ui) = status {
+                                                    ui.handle_transaction(transaction.clone());
+                                                }
+                                            });
                                         }
                                     }
                                     enable_touch_int();
@@ -278,13 +295,13 @@ impl<'a> AsyncOperation for MainState<'a> {
                     }
                 }
             },
-            MainStatus::Display(state) => {
+            MainStatus::Display(state, ui) => {
                 match state {
                     None => {
-                        self.threads.change(MainStatus::Display(Some(UIOperationThreads::new())));
-                    },
+                        *state = Some(UIOperationThreads::new());
+                    }
                     Some(t) => {
-                        if self.ui.advance((self.adc.read(), t)) == Some(false) {
+                        if ui.advance((self.adc.read(), t)) == Some(false) {
                             self.threads.hold();
                         }
                     }

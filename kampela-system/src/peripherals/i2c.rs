@@ -99,7 +99,7 @@ impl AsyncOperation for ReadI2C {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             ReadI2CState::Read => {
                 check_i2c_errors()?;
                 if if_in_free(|peripherals|

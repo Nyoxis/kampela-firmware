@@ -26,8 +26,7 @@ use crate::devices::display_transmission::{
     epaper_hw_init_cs,
     epaper_reset,
     epaper_write_command,
-    epaper_write_data,
-    BUFSIZE
+    epaper_write_data
 };
 use crate::draw::FrameBuffer;
 //**** Debug stuff ****//
@@ -99,7 +98,7 @@ pub fn epaper_update_part(peripherals: &mut Peripherals) {
 
 
 /// Normal drawing protocol, with full screen clearing
-pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; BUFSIZE]) {
+pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; SCREEN_BUFFER_SIZE]) {
     epaper_reset(&mut peripherals.gpio_s);
     epaper_write_command(peripherals, &[0x4E]);
     epaper_write_data(peripherals, &[0x00]);
@@ -113,7 +112,7 @@ pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; 
 }
 
 /// Fast and dirty refresh drawing
-pub fn epaper_draw_stuff_quickly(peripherals: &mut Peripherals, stuff: [u8; BUFSIZE]) {
+pub fn epaper_draw_stuff_quickly(peripherals: &mut Peripherals, stuff: [u8; SCREEN_BUFFER_SIZE]) {
     epaper_reset(&mut peripherals.gpio_s);
     epaper_write_command(peripherals, &[0x4E]);
     epaper_write_data(peripherals, &[0x00]);

@@ -410,7 +410,7 @@ impl <const LEN: usize, const POS: u8> AsyncOperation for Read<LEN, POS> {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             ReadState::Init => {
                 // abort unexpected processes
                 in_free(|peripherals|
@@ -668,7 +668,7 @@ impl <const LEN: usize> AsyncOperation for ReadLoop<LEN> {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             ReadLoopState::Read(ref mut state) => {
                 match state {
                     None => {

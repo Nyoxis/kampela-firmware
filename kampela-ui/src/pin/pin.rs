@@ -117,18 +117,13 @@ impl<P> ViewScreen for Pincode<P> where
         }
 
         let t = self.switch_tapped();
-        let filled = if t {
-            PrimitiveStyle::with_fill(BinaryColor::On)
-        } else {
-            PrimitiveStyle::with_fill(BinaryColor::Off)
-        };
+        let filled = PrimitiveStyle::with_fill(BinaryColor::Off);
         target.bounding_box().into_styled(filled).draw(target)?;
-        
-        self.pindots.draw(target, (self.entered_nums.len(), t))?;
+        self.pindots.draw(target, self.entered_nums.len())?;
         self.pinpad.draw(target, (t, h))?;
 
         if t {
-            request = Some(UpdateRequest::UltraFast);
+            request = Some(UpdateRequest::UltraFastSelective);
         }
 
         Ok((EventResult { request, state }, false))
@@ -140,9 +135,9 @@ impl<P> ViewScreen for Pincode<P> where
         if !matches!(self.tapped, PinpadState::Initial) { // ignore taps until permutated
             return (EventResult{ request, state }, ());
         }
-        if let Some(b) = self.pinpad.handle_tap(point, ()) {
+        if let Some((b, r)) = self.pinpad.handle_tap(point, ()) {
             self.tapped = PinpadState::Tapped;
-            request = Some(UpdateRequest::UltraFast);
+            request = Some(UpdateRequest::Part(r));
             self.push_entered(self.pinpad.buttons[b].num());
             self.check_pin(pin);
         }

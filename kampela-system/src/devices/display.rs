@@ -3,7 +3,8 @@ use crate::peripherals::usart::*;
 use crate::peripherals::gpio_pins::{display_res_clear, display_res_set};
 use crate::in_free;
 use crate::parallel::{AsyncOperation, Threads, Timer, DELAY};
-use crate::devices::display_transmission::{display_is_busy, EPDCommand, EPDData, EPDDataBuffer, BUFSIZE};
+use crate::devices::display_transmission::{display_is_busy, EPDCommand, EPDData, EPDDataBuffer};
+use kampela_ui::display_def::*;
 
 const LUT_LEN: usize = 0x99;
 const FAST_LUT: [u8; LUT_LEN] = [
@@ -139,7 +140,7 @@ impl<R> AsyncOperation for Request<R> where
     }
 
     fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             RequestState::Init(state) => {
                 match state {
                     None => {
@@ -277,7 +278,7 @@ impl AsyncOperation for EPDInit {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             EPDInitState::ResSet(state) => {
                 match state {
                     None => {
@@ -300,6 +301,7 @@ impl AsyncOperation for EPDInit {
                 match state {
                     None => {
                         in_free(|peripherals| {
+                            select_display(&mut peripherals.gpio_s);
                             display_res_clear(&mut peripherals.gpio_s);
                         });
                         self.threads.change(EPDInitState::ResClr(Some(Timer::new(DELAY))));
@@ -346,13 +348,13 @@ impl AsyncOperation for EPDInit {
 /// Write opposite RAM with the same data
 struct PostUpdate {
     threads: Threads<PostUpdateState, 1>,
-    bounds: <EPDDataBuffer::<BUFSIZE> as AsyncOperation>::Init,
+    bounds: <EPDDataBuffer::<SCREEN_BUFFER_SIZE> as AsyncOperation>::Init,
     last_black: bool,
 }
 
 enum PostUpdateState {
     WriteRamBlackOrRed(Option<WriteBlackOrRed>),
-    SendBufferData(Option<EPDDataBuffer<BUFSIZE>>),
+    SendBufferData(Option<EPDDataBuffer<SCREEN_BUFFER_SIZE>>),
     End,
     Error,
 }
@@ -362,8 +364,8 @@ impl Default for PostUpdateState {
 }
 
 impl AsyncOperation for PostUpdate {
-    type Init = (<EPDDataBuffer::<BUFSIZE> as AsyncOperation>::Init, bool);
-    type Input<'a> = &'a [u8; BUFSIZE];
+    type Init = (<EPDDataBuffer::<SCREEN_BUFFER_SIZE> as AsyncOperation>::Init, bool);
+    type Input<'a> = &'a [u8; SCREEN_BUFFER_SIZE];
     type Output = Option<bool>;
 
     fn new((bounds, last_black): Self::Init) -> Self {
@@ -375,7 +377,7 @@ impl AsyncOperation for PostUpdate {
     }
 
     fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             PostUpdateState::WriteRamBlackOrRed(state) => {
                 match state {
                     None => {
@@ -402,7 +404,7 @@ impl AsyncOperation for PostUpdate {
             PostUpdateState::SendBufferData(state) => {
                 match state {
                     None => {
-                        self.threads.change(PostUpdateState::SendBufferData(Some(EPDDataBuffer::<BUFSIZE>::new(self.bounds))));
+                        self.threads.change(PostUpdateState::SendBufferData(Some(EPDDataBuffer::<SCREEN_BUFFER_SIZE>::new(self.bounds))));
                     },
                     Some(a) => {
                         match a.advance(data) {
@@ -455,7 +457,7 @@ impl AsyncOperation for EPDDeepSleepEnter {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             EPDDeepSleepEnterState::DeepSleepMode(state) => {
                 match state {
                     None => {
@@ -480,6 +482,9 @@ impl AsyncOperation for EPDDeepSleepEnter {
                     Some(a) => {
                         match a.advance(&[0x01]) {
                             Some(true) => {
+                                in_free(|peripherals| {
+                                    deselect_display(&mut peripherals.gpio_s);
+                                });
                                 self.threads.change(EPDDeepSleepEnterState::End);
                                 return Some(true)
                             },
@@ -506,7 +511,7 @@ impl RequestType for UpdateUltraFast {}
 
 pub struct PrepareDraw {
     threads: Threads<PrepareDrawState, 1>,
-    bounds: <EPDDataBuffer::<BUFSIZE> as AsyncOperation>::Init,
+    bounds: <EPDDataBuffer::<SCREEN_BUFFER_SIZE> as AsyncOperation>::Init,
     last_black: bool,
 }
 
@@ -535,7 +540,7 @@ enum PrepareDrawState {
     InverseRedInverseBlackRam(Option<EPDData<2>>),
 
     WriteRamBlackOrRed(Option<WriteBlackOrRed>),
-    SendBufferData(Option<EPDDataBuffer<BUFSIZE>>),
+    SendBufferData(Option<EPDDataBuffer<SCREEN_BUFFER_SIZE>>),
 
     End,
     Error,
@@ -546,8 +551,8 @@ impl Default for PrepareDrawState {
 }
 
 impl AsyncOperation for PrepareDraw {
-    type Init = (<EPDDataBuffer::<BUFSIZE> as AsyncOperation>::Init, bool);
-    type Input<'a> = &'a [u8; BUFSIZE];
+    type Init = (<EPDDataBuffer::<SCREEN_BUFFER_SIZE> as AsyncOperation>::Init, bool);
+    type Input<'a> = &'a [u8; SCREEN_BUFFER_SIZE];
     type Output = Option<bool>;
 
     fn new((bounds, last_black): Self::Init) -> Self {
@@ -568,7 +573,7 @@ impl AsyncOperation for PrepareDraw {
     }
 
     fn advance(&mut self, data: Self::Input<'_>) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             PrepareDrawState::SetRamXAddress(state) => {
                 match state {
                     None => {
@@ -715,8 +720,8 @@ impl AsyncOperation for PrepareDraw {
                 match state {
                     None => {
                         let y = match self.bounds {
-                            None => [0, 0],
-                            Some(b) => b.2.to_le_bytes()
+                            None => (SCREEN_SIZE_X as u16 - 1).to_le_bytes(),
+                            Some(b) => b.3.to_le_bytes()
                         };
                         self.threads.change(PrepareDrawState::RamYAddressCounter(Some((EPDData::new(()), y))));
                     },
@@ -825,7 +830,7 @@ impl AsyncOperation for PrepareDraw {
             PrepareDrawState::SendBufferData(state) => {
                 match state {
                     None => {
-                        self.threads.change(PrepareDrawState::SendBufferData(Some(EPDDataBuffer::<BUFSIZE>::new(self.bounds))));
+                        self.threads.change(PrepareDrawState::SendBufferData(Some(EPDDataBuffer::<SCREEN_BUFFER_SIZE>::new(self.bounds))));
                     },
                     Some(a) => {
                         match a.advance(data) {
@@ -883,7 +888,7 @@ impl AsyncOperation for UpdateFull {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             UpdateFullState::TempSensorControl(state) => {
                 match state {
                     None => {
@@ -1012,7 +1017,7 @@ impl AsyncOperation for UpdateFast {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             UpdateFastState::WtiteLUTRegister(state) => {
                 match state {
                     None => {
@@ -1143,7 +1148,7 @@ impl AsyncOperation for UpdateUltraFast {
     }
 
     fn advance(&mut self, _: ()) -> Self::Output {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             UpdateUltraFastState::WtiteLUTRegister(state) => {
                 match state {
                     None => {

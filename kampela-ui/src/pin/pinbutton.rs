@@ -58,7 +58,7 @@ impl PinButton {
 }
 
 impl View for PinButton {
-    type DrawInput<'a> = bool;
+    type DrawInput<'a> = ();
     type DrawOutput = ();
     type TapInput<'a> = ();
     type TapOutput = bool;
@@ -68,13 +68,13 @@ impl View for PinButton {
     fn bounding_box_absolut(&self) -> Rectangle {
         self.widget.bounding_box_absolute()
     }
-	fn draw_view<'a, D: DrawTarget<Color = BinaryColor>>(&mut self, target: &mut DrawView<D>, t: Self::DrawInput<'_>) -> Result<Self::DrawOutput, D::Error>
+	fn draw_view<'a, D: DrawTarget<Color = BinaryColor>>(&mut self, target: &mut DrawView<D>, _: Self::DrawInput<'_>) -> Result<Self::DrawOutput, D::Error>
     where Self: 'a {
         let this_tapped = self.reset_tapped();
         if this_tapped {
             self.draw_tapped(target)?;
         } else {
-            self.draw_initial(target, t)?;
+            self.draw_initial(target)?;
         }
         Ok(())
 	}
@@ -85,15 +85,10 @@ impl View for PinButton {
 }
 
 impl PinButton {
-    fn draw_initial<D: DrawTarget<Color = BinaryColor>>(&self, target: &mut D, t: bool) -> Result<(), D::Error> {
-        let (on, off) = if t {
-            (BinaryColor::Off, BinaryColor::On)
-        } else {
-            (BinaryColor::On, BinaryColor::Off)
-        };
-        let filled = PrimitiveStyle::with_fill(off);
+    fn draw_initial<D: DrawTarget<Color = BinaryColor>>(&self, target: &mut D) -> Result<(), D::Error> {
+        let filled = PrimitiveStyle::with_fill(BinaryColor::Off);
         let thin_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(on)
+            .stroke_color(BinaryColor::On)
             .stroke_width(2)
             .stroke_alignment(StrokeAlignment::Inside)
             .build();
@@ -106,26 +101,24 @@ impl PinButton {
         rounded.into_styled(filled).draw(target)?;
         rounded.into_styled(thin_stroke).draw(target)?;
 
-        if t == false {
-            let character_style = MonoTextStyle::new(&BUTTON_FONT, BinaryColor::On);
-            let textbox_style = TextBoxStyleBuilder::new()
-                .alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Middle)
-                .build();
-    
-            TextBox::with_textbox_style(
-                &self.num.to_string(),
-                bounds,
-                character_style,
-                textbox_style,
-            )
-            .draw(target)?;
-        }
+        let character_style = MonoTextStyle::new(&BUTTON_FONT, BinaryColor::On);
+        let textbox_style = TextBoxStyleBuilder::new()
+            .alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Middle)
+            .build();
+
+        TextBox::with_textbox_style(
+            &self.num.to_string(),
+            bounds,
+            character_style,
+            textbox_style,
+        )
+        .draw(target)?;
 
 		Ok(())
     }
     fn draw_tapped<D: DrawTarget<Color = BinaryColor>>(&self, target: &mut DrawView<D>) -> Result<(), D::Error> {
-        let filled = PrimitiveStyle::with_fill(BinaryColor::Off);
+        let filled = PrimitiveStyle::with_fill(BinaryColor::On);
 
         let area = self.bounding_box_view();
         let rounded = RoundedRectangle::new(
@@ -134,7 +127,7 @@ impl PinButton {
         );
         rounded.into_styled(filled).draw(target)?;
     
-        let character_style = MonoTextStyle::new(&BUTTON_FONT, BinaryColor::On);
+        let character_style = MonoTextStyle::new(&BUTTON_FONT, BinaryColor::Off);
         let textbox_style = TextBoxStyleBuilder::new()
             .alignment(HorizontalAlignment::Center)
             .vertical_alignment(VerticalAlignment::Middle)

@@ -313,7 +313,7 @@ pub const PSRAM_PAGE_SIZE: u32 = 1024;
 /// Limits maximum address available to `AddressPsram([0x8f, ff, ff])`.
 pub const PSRAM_TOTAL_SIZE: u32 = 67_108_864;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PsramAccess {
     pub start_address: AddressPsram,
     pub total_len: usize,

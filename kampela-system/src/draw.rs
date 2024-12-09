@@ -1,5 +1,5 @@
 
-use alloc::{collections::vec_deque::VecDeque, borrow::ToOwned};
+use alloc::borrow::ToOwned;
 use bitvec::prelude::{BitArr, Msb0, bitarr};
 use efm32pg23_fix::Peripherals;
 use embedded_graphics::{
@@ -24,8 +24,6 @@ use crate::{
 };
 use kampela_ui::uistate::UpdateRequest;
 use crate::debug_display::epaper_draw_stuff_differently;
-
-const SCREEN_SIZE_VALUE: usize = (SCREEN_SIZE_X*SCREEN_SIZE_Y) as usize;
 
 // x and y of framebuffer and display RAM address are inversed
 fn refreshable_area_address(refreshable_area: Rectangle) -> Bounds {
@@ -79,7 +77,7 @@ const PART_REFRESH_POWER: i32 = 5000;
 
 const SEQUENCIAL_SELECTIVE_LIMIT: usize = 5; // more sequencial selective refreshes cause to leave traces, less cause artefacts
 /// Virtual display data storage
-type PixelData = BitArr!(for SCREEN_SIZE_VALUE, in u8, Msb0);
+type PixelData = BitArr!(for SCREEN_RESOLUTION as usize, in u8, Msb0);
 
 
 /// A virtual display that could be written to EPD simultaneously
@@ -88,14 +86,14 @@ pub struct FrameBuffer {
 }
 
 pub struct DisplayOperationThreads{
-    threads: Threads<DisplayState, 2>,
-    queue: VecDeque<UpdateRequest>,
+    threads: Threads<DisplayState, 1>,
+    next: Option<UpdateRequest>,
     last_black: bool,
     selective_counter: usize,
 }
 
 impl core::ops::Deref for DisplayOperationThreads {
-    type Target = Threads<DisplayState, 2>;
+    type Target = Threads<DisplayState, 1>;
 
     fn deref(&self) -> &Self::Target {
         &self.threads
@@ -112,39 +110,48 @@ impl DisplayOperationThreads {
     pub fn new() -> Self {
         Self{
             threads: Threads::new(DisplayState::IdleOrPending),
-            queue: VecDeque::new(),
+            next: None,
             last_black: false,
             selective_counter: 0,
         }
     }
 
-    pub fn add_to_queue(&mut self, request: UpdateRequest) {
-        self.queue.push_back(request);
+    pub fn try_add_next(&mut self, next: UpdateRequest) -> bool {
+        if self.next.is_none() {
+            self.next = Some(next);
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn queue_is_empty(&mut self) -> bool {
-        self.queue.len() == 0
+    pub fn is_pending(&self) -> bool {
+        if self.next.is_none() {
+            false
+        } else {
+            true
+        }
     }
 
     /// Start part display update sequence with white draw
     pub fn request(&mut self, request: UpdateRequest) {
         match request {
             UpdateRequest::Slow => {
-                self.wind(DisplayState::FullOperating(None));
+                self.change(DisplayState::FullOperating(None));
                 disable_touch_int();
             },
             UpdateRequest::Fast => {
-                self.wind(DisplayState::FastOperating(None));
+                self.change(DisplayState::FastOperating(None));
             },
             UpdateRequest::UltraFast => {
-                self.wind(DisplayState::UltraFastOperating((None, None, false)));
+                self.change(DisplayState::UltraFastOperating((None, None, false)));
             },
             UpdateRequest::UltraFastSelective => {
-                self.wind(DisplayState::UltraFastOperating((None, None, true)));
+                self.change(DisplayState::UltraFastOperating((None, None, true)));
             },
             UpdateRequest::Part(r) => {
                 let part_options = Some(refreshable_area_address(r));
-                self.wind(DisplayState::UltraFastOperating((None, part_options, true)));
+                self.change(DisplayState::UltraFastOperating((None, part_options, true)));
             },
             _ => {}
         }
@@ -155,7 +162,7 @@ impl FrameBuffer {
     /// Create new virtual display and fill it with ON pixels
     pub fn new_white() -> Self {
         Self {
-            data: bitarr!(u8, Msb0; 1; SCREEN_SIZE_X as usize*SCREEN_SIZE_Y as usize),
+            data: bitarr!(u8, Msb0; SCREEN_BIT_DEPTH; SCREEN_RESOLUTION as usize),
         }
     }
 
@@ -201,16 +208,9 @@ impl AsyncOperation for FrameBuffer {
 
     /// Move through display update progress
     fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
-        match threads.advance_state() {
+        match threads.turn() {
             DisplayState::IdleOrPending => {
-                if threads.is_all_running(&[|s| matches!(s, DisplayState::FullOperating(_))]) ||
-                    threads.is_all_running(&[|s| matches!(s, DisplayState::FastOperating(_))]) ||
-                    threads.is_all_running(&[|s| matches!(s, DisplayState::UltraFastOperating(_))])
-                {
-                    return Some(false)
-                }
-                if let Some(r) = threads.queue.pop_front() {
-                    threads.try_terminate(|s| matches!(s, DisplayState::Aftermath));
+                if let Some(r) = threads.next.take() {
                     threads.request(r);
                     return Some(false)
                 }
@@ -228,7 +228,6 @@ impl AsyncOperation for FrameBuffer {
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
-                        threads.hold();
                         if r == Some(true) {
                             threads.change(DisplayState::Aftermath);
                             Some(false)
@@ -250,7 +249,6 @@ impl AsyncOperation for FrameBuffer {
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
-                        threads.hold();
                         if r == Some(true) {
                             threads.change(DisplayState::Aftermath);
                             Some(false)
@@ -281,7 +279,6 @@ impl AsyncOperation for FrameBuffer {
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
-                        threads.hold();
                         if r == Some(true) {
                             threads.change(DisplayState::Aftermath);
                             Some(false)
@@ -293,7 +290,7 @@ impl AsyncOperation for FrameBuffer {
             },
             DisplayState::Aftermath => {
                 enable_touch_int();
-                threads.sync();
+                threads.change(DisplayState::IdleOrPending);
                 Some(true)
             },
             DisplayState::Error => {

@@ -87,7 +87,7 @@ impl<StateEnum, const CAPACITY: usize> Threads<StateEnum, CAPACITY> where
         }
     }
 
-    pub fn advance_state(&mut self) -> &mut StateEnum {
+    pub fn turn(&mut self) -> &mut StateEnum {
         if self.active == 0 {  // return default
             self.index = 0;
             self.repeat = false;
@@ -119,14 +119,18 @@ impl<StateEnum, const CAPACITY: usize> Threads<StateEnum, CAPACITY> where
     }
 
     /// Change current thread state
-    /// Be aware that thread won't switch right after the change
+    /// Be aware that thread won't turn right after the change
     /// If change in default acts like wind()
     pub fn change(&mut self, state: StateEnum) {
+        self.hold();
+        self.switch(state);
+    }
+
+    /// Schedule to switch current thread state
+    /// If switch in default acts like wind()
+    pub fn switch(&mut self, state: StateEnum) {
         if self.active & (1 << self.index) != 0 {
             self.threads_pool[self.index] = state;
-
-            // prioritize this thread
-            self.repeat = true;
         } else {
             self.wind(state);
         }
@@ -160,7 +164,7 @@ impl<StateEnum, const CAPACITY: usize> Threads<StateEnum, CAPACITY> where
         self.repeat = true;
     }
     /// Ends mathced thread, make sure thread is safe to terminate, true if success, false if not found
-    pub fn try_terminate<F: Fn (&StateEnum) -> bool>(&mut self, condition: F) -> bool {
+    pub fn try_terminate_any<F: Fn (&StateEnum) -> bool>(&mut self, condition: F) -> bool {
         let mut index_to_terminate = None;
         for (index, thread) in self.threads_pool.iter().enumerate() {
             if condition(thread) {
@@ -174,7 +178,7 @@ impl<StateEnum, const CAPACITY: usize> Threads<StateEnum, CAPACITY> where
     }
 
     /// Uses closure on every running thread, make sure the thread is safe to change from outside, match thread first
-    pub fn try_change<F: Fn(&mut StateEnum)>(&mut self, closure: F) -> bool {
+    pub fn try_change_any<F: FnMut(&mut StateEnum)>(&mut self, mut closure: F) -> bool {
         for thread in self.threads_pool.iter_mut() {
             closure(thread)
         }

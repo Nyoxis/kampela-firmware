@@ -38,7 +38,7 @@ impl AsyncOperation for ADC {
     }
 
     fn advance(&mut self, _: Self::Input<'_>) {
-        match self.threads.advance_state() {
+        match self.threads.turn() {
             ADCState::Ready => {
                 adc::reset_int_flags();
                 adc::request_adc_measure();

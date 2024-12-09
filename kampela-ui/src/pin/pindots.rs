@@ -39,7 +39,7 @@ impl Pindots {
 }
 
 impl View for Pindots {
-    type DrawInput<'a> = (usize, bool);
+    type DrawInput<'a> = usize;
     type DrawOutput = ();
     type TapInput<'a> = ();
     type TapOutput = ();
@@ -49,23 +49,17 @@ impl View for Pindots {
     fn bounding_box_absolut(&self) -> Rectangle {
         PINDOTS_WIDGET.bounding_box_absolute()
     }
-	fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, (dots, t): Self::DrawInput<'_>) -> Result<(),D::Error>
+	fn draw_view<'a, D>(&mut self, target: &mut DrawView<D>, dots: Self::DrawInput<'_>) -> Result<(),D::Error>
     where
         D: DrawTarget<Color = BinaryColor>,
         Self: 'a,
     {
-        let (on, _) = if t {
-            (BinaryColor::Off, BinaryColor::On)
-        } else {
-            (BinaryColor::On, BinaryColor::Off)
-        };
-
         let thin_stroke = PrimitiveStyleBuilder::new()
-            .stroke_color(on)
+            .stroke_color(BinaryColor::On)
             .stroke_width(2)
             .stroke_alignment(StrokeAlignment::Inside)
             .build();
-        let filled = PrimitiveStyle::with_fill(on);
+        let filled = PrimitiveStyle::with_fill(BinaryColor::On);
         let area = self.bounding_box_view();
         for i in 0..PIN_LEN {
             let dot = Circle::new(

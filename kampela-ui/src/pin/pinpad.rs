@@ -105,7 +105,7 @@ impl<P> View for Pinpad<P> where
     type DrawInput<'a> = (bool, &'a mut <P as Platform>::HAL) where Self: 'a;
     type DrawOutput = ();
     type TapInput<'a> = () where Self: 'a,;
-    type TapOutput = usize;
+    type TapOutput = (usize, Rectangle);
     fn bounding_box(&self) -> Rectangle {
         PINPAD_WIDGET.bounding_box()
     }
@@ -115,21 +115,23 @@ impl<P> View for Pinpad<P> where
 	fn draw_view<'a, D: DrawTarget<Color = BinaryColor>>(&mut self, target: &mut DrawView<D>, (t, h): Self::DrawInput<'a>) -> Result<(), D::Error>
     where Self: 'a {
         for button in self.buttons.iter_mut() {
-            button.draw(target, t)?;
+            button.draw(target, ())?;
         }
         if t {
             self.shuffle(h);
         }
         Ok(())
 	}
-    fn handle_tap_view<'a>(&mut self, point: Point, _: ()) -> usize
+    fn handle_tap_view<'a>(&mut self, point: Point, _: ()) -> Self::TapOutput
     where Self: 'a {
         let mut tapped = 0;
+        let mut area = self.bounding_box_absolut();
         for (i, button) in self.buttons.iter_mut().enumerate() {
             if button.handle_tap(point, ()).is_some() {
                 tapped = i;
+                area = button.bounding_box_absolut();
             }
         }
-        tapped
+        (tapped, area)
     }
 }
