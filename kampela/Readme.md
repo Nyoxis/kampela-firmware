@@ -40,6 +40,13 @@ brew install --cask gcc-arm-embedded
 #### manual installation
 download and install suitable darwin GNU-ARM package from [ARM GNU website](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
 
+## Windows
+
+### Install rustup
+download and install rustup from [Rust-lang website](https://www.rust-lang.org/tools/install)
+
+### Install ARM toolchain
+download and install suitable darwin GNU-ARM package from [ARM GNU website](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
 
 # Preparations
 
@@ -61,8 +68,13 @@ cargo build --release
 
 For Pilkki flasher look [here](https://github.com/Alzymologist/pilkki).
 
+#### Linux/MacOs
 ```sh
 ./binarize.sh --pilkki
+```
+#### Windows
+```bat
+./binarize.bat --pilkki
 ```
 ### Segger
 
