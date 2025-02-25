@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::{boxed::Box, string::String};
 use efm32pg23_fix::Peripherals;
 use cortex_m::asm::delay;
 
@@ -20,30 +20,21 @@ use embedded_text::{
     TextBox,
 };
 
-use crate::devices::display_transmission::{
-    display_is_busy_cs,
-    epaper_deep_sleep,
-    epaper_hw_init_cs,
-    epaper_reset,
-    epaper_write_command,
-    epaper_write_data
-};
+use crate::peripherals::{gpio_pins::DISP_INT_PIN, usart::{deselect_display, select_display, write_to_usart}};
+use crate::devices::display_transmission::{DATA_UPDATE_MODE, HOLD_MODE, ALL_CLEAR_MODE, X_ADDRESS_WIDTH};
 use crate::draw::FrameBuffer;
 //**** Debug stuff ****//
 
 /// Emergency debug function that spits out errors
 pub fn burning_tank(peripherals: &mut Peripherals, text: String) {
-    epaper_hw_init_cs(peripherals);
     make_text(peripherals, &text);
-    delay(10000000);
-    epaper_deep_sleep(peripherals);
 }
 
 /// see this <https://github.com/embedded-graphics/embedded-graphics/issues/716>
 fn make_text(peripherals: &mut Peripherals, text: &str) {
-    let mut buffer = FrameBuffer::new_white();
+    let mut buffer = Box::new(FrameBuffer::new_white());
     let to_print = TextToPrint{line: text};
-    to_print.draw(&mut buffer).unwrap();
+    to_print.draw(buffer.as_mut()).unwrap();
     buffer.apply(peripherals);
 }
 
@@ -74,53 +65,50 @@ impl Drawable for TextToPrint<'_> {
     }
 }
 
-/// Last command in drawing protocol; actually starts display action
-pub fn epaper_update(peripherals: &mut Peripherals) {
-    epaper_write_command(peripherals, &[0x12]);
-    delay(100000);
-    while display_is_busy_cs(peripherals) {}
-    epaper_write_command(peripherals, &[0x22]); // from manual, Y: "Display Update Control"
-epaper_write_data(peripherals, &[0xF7]); // ?
-    epaper_write_command(peripherals, &[0x20]); // from manual, Y: "Activate Display Update Sequence"
-    while display_is_busy_cs(peripherals) {}
-}
-
-/// Partial display update; used to initiate display action when performing fast drawing without
-/// full clear
-pub fn epaper_update_part(peripherals: &mut Peripherals) {
-    epaper_write_command(peripherals, &[0x22]); // from manual, Y: "Display Update Control"
-    epaper_write_data(peripherals, &[0xFF]); // ?
-    epaper_write_command(peripherals, &[0x20]); // from manual, Y: "Activate Display Update Sequence"
-    delay(1000); // why delay, from where the number?
-    while display_is_busy_cs(peripherals) {}
-}
-
-
-
 /// Normal drawing protocol, with full screen clearing
-pub fn epaper_draw_stuff_differently(peripherals: &mut Peripherals, stuff: [u8; SCREEN_BUFFER_SIZE]) {
-    epaper_reset(&mut peripherals.gpio_s);
-    epaper_write_command(peripherals, &[0x4E]);
-    epaper_write_data(peripherals, &[0x00]);
-    epaper_write_command(peripherals, &[0x4F]);
-    epaper_write_data(peripherals, &[0x07]);
-    epaper_write_command(peripherals, &[0x24]); // from manual, Y: "Write Black and White image to RAM"
-    epaper_write_data(peripherals, &stuff);
-    epaper_write_command(peripherals, &[0x26]);
-    epaper_write_data(peripherals, &stuff);
-    epaper_update(peripherals);
+pub fn debug_draw(peripherals: &mut Peripherals, stuff: [u8; SCREEN_BUFFER_SIZE]) {
+    deselect_display(&mut peripherals.gpio_s);
+    delay(50000);
+    sharp_write_data(peripherals, &stuff);
 }
 
-/// Fast and dirty refresh drawing
-pub fn epaper_draw_stuff_quickly(peripherals: &mut Peripherals, stuff: [u8; SCREEN_BUFFER_SIZE]) {
-    epaper_reset(&mut peripherals.gpio_s);
-    epaper_write_command(peripherals, &[0x4E]);
-    epaper_write_data(peripherals, &[0x00]);
-    epaper_write_command(peripherals, &[0x4F]);
-    epaper_write_data(peripherals, &[0x07]);
-    epaper_write_command(peripherals, &[0x3C]);
-    epaper_write_data(peripherals, &[0x80]);
-    epaper_write_command(peripherals, &[0x24]); // from manual, Y: "Write Black and White image to RAM"
-    epaper_write_data(peripherals, &stuff);
-    epaper_update_part(peripherals);
+/// Send EPD to low power state; should be performed when screen is not drawing at all times to
+/// extend component life
+pub fn sharp_hold(peripherals: &mut Peripherals) {
+    select_display(&mut peripherals.gpio_s);
+    let data_transfer: u16 = HOLD_MODE;
+    for data in data_transfer.to_be_bytes().iter() {
+        write_to_usart(peripherals, *data);
+    }
+    deselect_display(&mut peripherals.gpio_s);
+}
+
+/// Send data to EPD
+///
+/// for critical section
+pub fn sharp_write_data(peripherals: &mut Peripherals, data_set: &[u8]) {
+    select_display(&mut peripherals.gpio_s);
+    delay(2000);
+    let mut data_transfer: u16 = DATA_UPDATE_MODE;
+    for (gateline, line ) in data_set.chunks(X_ADDRESS_WIDTH).enumerate() {
+        data_transfer |= ((0x00FF & (gateline + 1) as u16) << 8).reverse_bits();
+        for data in data_transfer.to_be_bytes().iter() {
+            write_to_usart(peripherals, *data);
+        }
+        data_transfer = 0;
+        for data in line.iter() {
+            write_to_usart(peripherals, *data);
+        }
+    }
+    deselect_display(&mut peripherals.gpio_s);
+    //    display_data_command_clear(peripherals);
+}
+
+pub fn sharp_clear(peripherals: &mut Peripherals) {
+    select_display(&mut peripherals.gpio_s);
+    let data_transfer: u16 = ALL_CLEAR_MODE;
+    for data in data_transfer.to_be_bytes().iter() {
+        write_to_usart(peripherals, *data);
+    }
+    deselect_display(&mut peripherals.gpio_s);
 }

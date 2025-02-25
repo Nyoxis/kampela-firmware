@@ -2,7 +2,7 @@
 
 use efm32pg23_fix::Peripherals;
 
-use crate::peripherals::{
+use crate::{devices::touch::init_touch, peripherals::{
     adc::init_adc, 
     cmu::init_cmu, 
     eusart::init_eusart, 
@@ -11,13 +11,12 @@ use crate::peripherals::{
     ldma::{init_ldma, NfcXferBlock},
     timers::init_timers,
     usart::init_usart,
-};
+}};
 use crate::devices::psram::psram_reset;
-use crate::devices::touch::init_touch;
 use crate::devices::flash::{flash_init,flash_sleep};
 
 /// All peripheral initializations
-pub fn init_peripherals(peripherals: &mut Peripherals, nfc_descriptor_address: *const NfcXferBlock) {
+pub fn init_peripherals(peripherals: &mut Peripherals/*, nfc_descriptor_address: *const NfcXferBlock*/) {
     // first, start clocking
     init_cmu(&mut peripherals.cmu_s);
 
@@ -37,11 +36,12 @@ pub fn init_peripherals(peripherals: &mut Peripherals, nfc_descriptor_address: *
     psram_reset(peripherals);
 
     // Setting up peripherals for NFC capture
-    init_ldma(peripherals, nfc_descriptor_address);
+    //init_ldma(peripherals, nfc_descriptor_address);
     
     // TODO: SET UP NVIC for LDMA!
 
     // set up TIMER0 for NFC reading
+    // set up TIMER1 for display extint
     init_timers(peripherals);
 
     // set up ADC to monitor power level
@@ -51,8 +51,6 @@ pub fn init_peripherals(peripherals: &mut Peripherals, nfc_descriptor_address: *
 
     // set up i2c line to communicate with touch pad
     init_i2c(peripherals);
-
     init_touch(peripherals);
-
     // TODO: lock GPIO
 }

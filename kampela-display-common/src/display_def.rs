@@ -1,6 +1,7 @@
+// Sharp LS027B7DH01
 use embedded_graphics_core::{geometry::{Point, Size}, primitives::Rectangle};
-pub const SCREEN_SIZE_X: u32 = 264;
-pub const SCREEN_SIZE_Y: u32 = 176;
+pub const SCREEN_SIZE_X: u32 = 400;
+pub const SCREEN_SIZE_Y: u32 = 240;
 pub const SCREEN_RESOLUTION: u32 = SCREEN_SIZE_X * SCREEN_SIZE_Y;
 pub const SCREEN_BIT_DEPTH: usize = 1;
 pub const SCREEN_BIT_SIZE: usize = SCREEN_RESOLUTION as usize * SCREEN_BIT_DEPTH;

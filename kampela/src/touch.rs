@@ -1,14 +1,10 @@
-use alloc::{collections::vec_deque::VecDeque, borrow::ToOwned};
+use alloc::collections::vec_deque::VecDeque;
 use nalgebra::{Affine2, OMatrix, Point2, RowVector3};
 use lazy_static::lazy_static;
 use embedded_graphics::prelude::Point;
 
-use core::cell::RefCell;
-use cortex_m::interrupt::{free, Mutex};
-
-use kampela_system::{devices::touch::LEN_NUM_TOUCHES, in_free, if_in_free};
+use kampela_system::devices::touch::{clear_touch_if, LEN_NUM_TOUCHES};
 use kampela_ui::display_def::*;
-use efm32pg23_fix::interrupt;
 
 pub const MAX_TOUCH_QUEUE: usize = 2;
 
@@ -16,64 +12,34 @@ lazy_static! {
     // MAGIC calibration numbers obtained through KOLIBRI tool
     static ref AFFINE_MATRIX: Affine2<f32> = Affine2::from_matrix_unchecked(
         OMatrix::from_rows(&[
-            RowVector3::<f32>::new(1.0022, -0.0216, -4.2725),
-            RowVector3::<f32>::new(0.0061, 1.1433, -13.7305),
+            RowVector3::<f32>::new(1.4588, -0.0164, -195.5833),
+            RowVector3::<f32>::new(-0.1546, 1.5155, 30.7841),
             RowVector3::<f32>::new(0.0, 0.0, 1.0),
         ])
     );
-    // touches len needed in interrupt function, hence global
-    pub static ref TOUCHES: Mutex<RefCell<VecDeque<Point>>> = Mutex::new(RefCell::new(VecDeque::with_capacity(MAX_TOUCH_QUEUE)));
-    // set by interrupt function, hence global
-    pub static ref TOUCH_STATUS: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
 }
 
-fn reset_touch_status() {
-    free(|cs| {
-        let mut touch_status = TOUCH_STATUS.borrow(cs).borrow_mut();
-        *touch_status = false;
-    })
-}
+pub struct Touches(VecDeque<Point>);
 
-pub fn get_touch_status() -> bool {
-    free(|cs| TOUCH_STATUS.borrow(cs).borrow().to_owned())
-}
-
-#[interrupt]  // IRQ required to wake up after vfi
-fn GPIO_EVEN() {  // Swtich status to start read touch
-    if if_in_free(|peripherals|
-        peripherals.gpio_s.if_().read().extif0().bit_is_clear()
-    ).unwrap_or(true) {
-        return
+impl Touches {
+    pub fn new() -> Self {
+        Self(VecDeque::with_capacity(MAX_TOUCH_QUEUE))
     }
-    free(|cs| {
-        let touches = TOUCHES.borrow(cs).borrow();
-        if touches.len() < MAX_TOUCH_QUEUE {
-            let mut status = TOUCH_STATUS.borrow(cs).borrow_mut();
-            *status = true
-        }
-    });
-    in_free(|peripherals|
-        peripherals.gpio_s.if_clr().write(|w_reg| w_reg.extif0().set_bit())
-    );
-}
 
-pub fn try_push_touch_data(touch_data: [u8; LEN_NUM_TOUCHES]) {
-    reset_touch_status();
-    if let Some(point) = convert(touch_data) {
-        free(|cs| {
-            let mut touches = TOUCHES.borrow(cs).borrow_mut();
-            if touches.len() < MAX_TOUCH_QUEUE {
-                touches.push_back(point);
+    pub fn try_push_touch_data(&mut self, touch_data: [u8; LEN_NUM_TOUCHES]) -> bool {
+        clear_touch_if();
+        if self.0.len() < MAX_TOUCH_QUEUE {
+            if let Some(point) = convert(touch_data) {
+                self.0.push_back(point);
+                return true
             }
-        })
+        }
+        false
     }
-}
-
-pub fn get_touch_point() -> Option<Point> {
-    free(|cs| {
-        let mut touches = TOUCHES.borrow(cs).borrow_mut();
-        touches.pop_front()
-    })
+    
+    pub fn take_touch_point(&mut self) -> Option<Point> {
+        self.0.pop_front()
+    }
 }
 
 pub fn convert(touch_data: [u8; LEN_NUM_TOUCHES]) -> Option<Point> {
@@ -93,52 +59,55 @@ pub fn convert(touch_data: [u8; LEN_NUM_TOUCHES]) -> Option<Point> {
         )
     } else { None }
 }
-
 /*
-pub struct TouchState {
-    state: touch::Read,
-}
-
-impl TouchState {
-    pub fn new(&mut self) -> Self {
-        Self {
-            state: touch::Read::new();
-        }
-    }
-
-    pub fn query_touch(&mut self, peripherals: &mut Peripherals) -> Option<Point> {
-        
-        if let Some(touch_data) = self.advance() {
-            peripherals
-                .gpio_s
-                .if_
-                .write(|w_reg| w_reg.extif0().clear_bit());
-            if touch_data[0] == 1 {
-                    let detected_y = (((touch_data[1] as u16 & 0b00001111) << 8) | touch_data[2] as u16) as i32;
-                    let detected_x = (((touch_data[3] as u16 & 0b00001111) << 8) | touch_data[4] as u16) as i32;
-                    let touch = Point::new(SCREEN_SIZE_X as i32 - detected_x, detected_y);
-
-                    let touch_as_point2 = Point2::new(touch.x as f32, touch.y as f32);
-                    let display_as_point2 = affine_matrix.transform_point(&touch_as_point2);
-            
-                    Some( Point {
-                        x: display_as_point2.coords[0] as i32,
-                        y: display_as_point2.coords[1] as i32,
-                    })
-            } else { None }
-        } else { None }
-    }
-
-    fn advance(&mut self) -> Option<[u8; LEN_NUM_TOUCHES]> {
-free(|cs| {
-            if let Some(ref mut peripherals) = PERIPHERALS.borrow(cs).borrow_mut().deref_mut() {
-                if peripherals.gpio_s.if_.read().extif0().bit_is_set() {
-                    self.status = UIStatus::TouchState(ft6336_read_at::<LEN_NUM_TOUCHES>(peripherals, FT6X36_REG_NUM_TOUCHES).unwrap());
+fn blocking_touch_read() -> Point {
+    let mut state: Option<Read<LEN_NUM_TOUCHES, FT6X36_REG_NUM_TOUCHES>> = None;
+    clear_touch_if();
+    let touch_data = loop {
+        match &mut state {
+            None => {
+                if is_touch_int() {
+                    state = Some(Read::new(()));
+                }
+            },
+            Some(reader) => {
+                match reader.advance(()) {
+                    Ok(Some(Some(touch))) => {
+                        break touch;
+                    },
+                    Ok(Some(None)) => {},
+                    Ok(None) => {}
+                    Err(e) => panic!("{:?}", e),
                 }
             }
+        }
+    };
+
+    let detected_y = (((touch_data[1] as u16 & 0b00001111) << 8) | touch_data[2] as u16) as i32;
+    let detected_x = (((touch_data[3] as u16 & 0b00001111) << 8) | touch_data[4] as u16) as i32;
+    Point::new(SCREEN_SIZE_X as i32 - detected_x, detected_y)
+}
+
+pub fn kolibri_test() {
+    // Prepare
+    let mut display = FrameBuffer::new_white();
+
+    let mut rng = se_rng::SeRng{};
+
+    let mut state = UIState::init(&mut rng);
+
+    let mut do_update = true;
+    loop {
+        if do_update {
+            state.render(&mut display).unwrap();
+            do_update = false;
+        }
+        in_free(|peripherals| {
+            display.apply(peripherals);
         });
 
-        None
+        let point = blocking_touch_read();
+        do_update = state.process_touch(point, &mut rng).unwrap();
     }
 }
 */

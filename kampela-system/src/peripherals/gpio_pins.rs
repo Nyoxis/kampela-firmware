@@ -5,22 +5,23 @@
 use cortex_m::asm::delay;
 use efm32pg23_fix::GpioS;
 
-// PA
-
-pub const MCU_OK: u8 = 3;
+pub const PORT_A: u8 = 0;
+/*
+pub const MCU_OK: u8 = 3;*/
 pub const SCL_PIN: u8 = 4;
-pub const SDA_PIN: u8 = 5;
-pub const DISP_RES_PIN: u8 = 6;
-pub const TOUCH_RES_PIN: u8 = 7;
-pub const NFC_PIN: u8 = 8;
+pub const SDA_PIN: u8 = 5;/*
+pub const TOUCH_RES_PIN: u8 = 7;*/
+pub const NFC_PIN: u8 = 8;/*
 pub const POW_PIN: u8 = 9;
+*/
 
-// PB
+
+pub const PORT_B: u8 = 1;
 
 pub const TOUCH_INT_PIN: u8 = 1;
-pub const SPI_BUSY_PIN: u8 = 4;
 
-// PC
+pub const PORT_C: u8 = 2;
+
 pub const FLASH_CS_PIN: u8 = 0;
 pub const E_MISO_PIN: u8 = 1;
 pub const E_MOSI_PIN: u8 = 2;
@@ -30,9 +31,10 @@ pub const PSRAM_MISO_PIN: u8 = 5;
 pub const PSRAM_MOSI_PIN: u8 = 6;
 pub const PSRAM_SCK_PIN: u8 = 7;
 
-// PD
-pub const DISP_CS_PIN: u8 = 2;
-pub const DISP_DC_PIN: u8 = 3;
+pub const PORT_D: u8 = 3;
+
+pub const DISP_CS_PIN: u8 = 0;
+pub const DISP_INT_PIN: u8 = 1;
 
 
 /// Macro to switch a specific pin on a specific port.
@@ -64,7 +66,7 @@ macro_rules! gpio_pin {
 }
 
 // Prepare GPIO pins
-
+/*
 gpio_pin!(
     /// Set MCU_OK status:
     /// Clear MCU_OK status:
@@ -74,7 +76,7 @@ gpio_pin!(
     porta_dout,
     MCU_OK
 );
-
+*/
 gpio_pin!(
     /// Set flash chip select:
     /// Clear flash chip select:
@@ -94,27 +96,7 @@ gpio_pin!(
     portd_dout,
     DISP_CS_PIN
 );
-
-gpio_pin!(
-    /// Set display data/command:
-    /// Clear display data/command:
-    /// port D, pin [`DISP_DC_PIN`].
-    spi_data_command_set,
-    spi_data_command_clear,
-    portd_dout,
-    DISP_DC_PIN
-);
-
-gpio_pin!(
-    /// Set display reset:
-    /// Clear display reset:
-    /// port A, pin [`DISP_RES_PIN`].
-    display_res_set,
-    display_res_clear,
-    porta_dout,
-    DISP_RES_PIN
-);
-
+/*
 gpio_pin!(
     /// Set touch reset:
     /// Clear touch reset:
@@ -124,7 +106,7 @@ gpio_pin!(
     porta_dout,
     TOUCH_RES_PIN
 );
-
+*/
 gpio_pin!(
     /// scl set:
     /// scl clear:
@@ -144,7 +126,7 @@ gpio_pin!(
     porta_dout,
     SDA_PIN
 );
-
+/*
 gpio_pin!(
     /// Set power:
     /// Clear power:
@@ -154,11 +136,21 @@ gpio_pin!(
     porta_dout,
     POW_PIN
 );
+*/
+gpio_pin!(
+    /// Set TOUCH INT:
+    /// Clear TOUCH INT:
+    /// port B, pin [`TOUCH_INT_PIN`].
+    touch_int_pin_set,
+    touch_int_pin_clear,
+    portb_dout,
+    TOUCH_INT_PIN
+);
 
 gpio_pin!(
     /// Set MISO:
     /// Clear MISO:
-    /// port A, pin [`E_MISO_PIN`].
+    /// port C, pin [`E_MISO_PIN`].
     miso_set,
     miso_clear,
     portc_dout,
@@ -168,7 +160,7 @@ gpio_pin!(
 gpio_pin!(
     /// Set MOSI:
     /// Clear MOSI:
-    /// port A, pin [`E_MOSI_PIN`].
+    /// port C, pin [`E_MOSI_PIN`].
     mosi_set,
     mosi_clear,
     portc_dout,
@@ -178,12 +170,13 @@ gpio_pin!(
 gpio_pin!(
     /// Set SCK:
     /// Clear SCK:
-    /// port A, pin [`E_SCK_PIN`].
+    /// port C, pin [`E_SCK_PIN`].
     sck_set,
     sck_clear,
     portc_dout,
     E_SCK_PIN
 );
+
 
 gpio_pin!(
     /// Set PSRAM CS:
@@ -267,12 +260,7 @@ fn map_gpio(gpio: &mut GpioS) {
                 .mode1().inputpullfilter() // interrupts from display sensor
                 .mode4().input() // BUSY spi
     });
-    gpio
-        .portb_dout()
-        .write(|w_reg| unsafe {
-            w_reg
-                .dout().bits(1 << 1) //pull-up display sensor pin
-        });
+    touch_int_pin_set(gpio); // pull-up;
     gpio
         .portc_model()
         .write(|w_reg| {
@@ -290,21 +278,19 @@ fn map_gpio(gpio: &mut GpioS) {
         .portd_model()
         .write(|w_reg| {
             w_reg
-                .mode2().inputpull() // Display chip select
-                .mode3().pushpull() // Display data/command
+                .mode0().pushpull() // Display chip select
+                .mode1().pushpull() // Display extin
     });
 }
 
 /// Set GPIO pins to their starting values
 fn set_gpio_pins(gpio: &mut GpioS) {
-    mcu_ok_clear(gpio);
-    mcu_ok_clear(gpio);
-    pow_set(gpio);
+    //mcu_ok_clear(gpio);
+    //mcu_ok_clear(gpio);
+    //pow_set(gpio);
     delay(100000); // wait after power set! (epaper manual for 2.8V setup)
-    display_chip_select_set(gpio);
-    spi_data_command_clear(gpio);
-    display_res_clear(gpio);
-    touch_res_set(gpio);
+    display_chip_select_clear(gpio);
+    //touch_res_set(gpio);
     sda_set(gpio);
     scl_set(gpio);
     flash_chip_select_set(gpio);
@@ -318,8 +304,33 @@ fn set_gpio_pins(gpio: &mut GpioS) {
     nfc_pin_clear(gpio);
 }
 
+pub fn touch_int_pin_set_input(gpio: &mut GpioS) {
+    gpio
+        .portb_model()
+        .write(|w_reg| {
+            w_reg
+                .mode1().inputpullfilter() // interrupts from display sensor
+            });
+    touch_int_pin_set(gpio);
+    enable_touch_int_flag(gpio);
+}
+
+pub fn send_touch_int(gpio: &mut GpioS) {
+    gpio
+        .portb_model()
+        .write(|w_reg| {
+            w_reg
+                .mode1().pushpull() // interrupts from display sensor
+            });
+    disable_touch_int_flag(gpio);
+    touch_int_pin_clear(gpio);
+}
+
 /// Set up external interrupt pins (used to get touch events from touch pad)
 pub fn enable_touch_int_flag(gpio: &mut GpioS) {
+    gpio
+        .if_clr()
+        .write(|w_reg| w_reg.extif0().set_bit());
     gpio
         .extipsell()
         .write(|w_reg| w_reg.extipsel0().portb());

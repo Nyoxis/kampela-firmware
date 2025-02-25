@@ -3,18 +3,17 @@
 use efm32pg23_fix::{GpioS, Peripherals};
 use crate::peripherals::gpio_pins::*;
 
-pub const BAUDRATE_USART: u32 = 10_000_000;
+pub const BAUDRATE_USART: u32 = 8_000_000; // SCLK max 2MHz - datasheet
 
 /// Select display channel
 pub fn select_display(gpio: &mut GpioS) {
-    display_chip_select_clear(gpio);
+    display_chip_select_set(gpio);
 }
 
 /// Deselect display channel
 pub fn deselect_display(gpio: &mut GpioS) {
-    display_chip_select_set(gpio);
+    display_chip_select_clear(gpio);
 }
-
 /// Select flash channel
 pub fn select_flash(gpio: &mut GpioS) {
     flash_chip_select_clear(gpio);
@@ -23,23 +22,6 @@ pub fn select_flash(gpio: &mut GpioS) {
 /// Deselect flash channel
 pub fn deselect_flash(gpio: &mut GpioS) {
     flash_chip_select_set(gpio);
-}
-
-
-/// Indicate that command is sent
-pub fn display_select_command(gpio: &mut GpioS) {
-    spi_data_command_clear(gpio);
-}
-
-/// Indicate that data is sent
-pub fn display_select_data(gpio: &mut GpioS) {
-    spi_data_command_set(gpio);
-}
-
-/// BUSY is on port B, pin [`SPI_BUSY_PIN`].
-pub fn spi_is_busy(gpio: &mut GpioS) -> bool {
-    let portb_din_bits = gpio.portb_din().read().din().bits();
-    portb_din_bits & (1 << SPI_BUSY_PIN) == (1 << SPI_BUSY_PIN)
 }
 
 /// Initialize USART0, for EPD (display)
@@ -98,7 +80,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_txroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_MOSI_PIN)
     });
     // display MISO
@@ -107,7 +89,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_rxroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_MISO_PIN)
     });
     // display SCK
@@ -116,7 +98,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_clkroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_SCK_PIN)
     });
     // route enable

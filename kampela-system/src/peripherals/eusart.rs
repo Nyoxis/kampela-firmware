@@ -25,7 +25,7 @@ pub fn init_eusart(peripherals: &mut Peripherals) {
         .eusart2_txroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(PSRAM_MOSI_PIN)
     });
     // PSRAM MISO
@@ -34,7 +34,7 @@ pub fn init_eusart(peripherals: &mut Peripherals) {
         .eusart2_rxroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(PSRAM_MISO_PIN)
     });
     // PSRAM SCK
@@ -43,7 +43,7 @@ pub fn init_eusart(peripherals: &mut Peripherals) {
         .eusart2_sclkroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(PSRAM_SCK_PIN)
     });
     // route enable
