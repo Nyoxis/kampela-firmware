@@ -74,8 +74,9 @@ For Pilkki flasher look [here](https://github.com/Alzymologist/pilkki).
 ```
 #### Windows
 ```bat
-./binarize.bat --pilkki
+./binarize.bat
 ```
+pass COM port as argument if needed
 ### Segger
 
 For Segger you need to install [simplicity-commander](https://www.silabs.com/developers/mcu-programming-options).
@@ -85,5 +86,16 @@ In case of ArchLinux there is [AUR package](https://aur.archlinux.org/packages/s
 ./binarize.sh --segger
 ```
 
+## Flashing WordList
 
+Required for word prediction function
+Flashing to EFlash only possible with **Pilkki** with **Software** and **Firmware** supporting this feature
 
+#### Linux/MacOs
+```sh
+./write_eflash.sh
+```
+#### Windows
+```bat
+./write_eflash.bat
+```
