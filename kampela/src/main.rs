@@ -15,12 +15,7 @@ use embedded_alloc::Heap;
 use lazy_static::lazy_static;
 
 use kampela_system::{
-    PERIPHERALS, CORE_PERIPHERALS,
-    devices::{power::ADC, touch::{Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES, enable_touch_int}},
-    debug_display::burning_tank,
-    init::init_peripherals,
-    parallel::{AsyncOperation, Threads},
-    BUF_THIRD, CH_TIM0, LINK_1, LINK_2, LINK_DESCRIPTORS, TIMER0_CC0_ICF, NfcXfer, NfcXferBlock,
+    debug_display::burning_tank, devices::{power::ADC, touch::{clear_touch_if, enable_touch_int, is_touch_int, Read, FT6X36_REG_NUM_TOUCHES, LEN_NUM_TOUCHES}}, init::init_peripherals, parallel::{AsyncOperation, Threads}, NfcXfer, NfcXferBlock, BUF_THIRD, CH_TIM0, CORE_PERIPHERALS, LINK_1, LINK_2, LINK_DESCRIPTORS, PERIPHERALS, TIMER0_CC0_ICF
 };
 use efm32pg23_fix::{interrupt, Interrupt, Peripherals, NVIC, SYST};
 
@@ -29,10 +24,18 @@ use ui::{UIOperationThreads, UI};
 mod nfc;
 use nfc::{BufferStatus, NfcReceiver, NfcStateOutput, NfcResult, NfcError};
 mod touch;
-use touch::{try_push_touch_data, get_touch_status};
+use touch::Touches;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
+
+use core::mem::MaybeUninit;
+const HEAP_SIZE: usize = 0x6500;
+static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+
+unsafe fn init_heap() {
+    HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE)
+}
 
 lazy_static!{
     #[derive(Debug)]
@@ -55,6 +58,7 @@ fn oom(l: Layout) -> ! {
 #[panic_handler]
 fn panic(panic: &PanicInfo<'_>) -> ! {
     let mut peripherals = unsafe{Peripherals::steal()};
+    unsafe { init_heap(); } // free up heap for critical drawing buffer
     burning_tank(&mut peripherals, format!("{:?}", panic));
     loop {}
 }
@@ -85,13 +89,7 @@ fn LDMA() {
 
 #[entry]
 fn main() -> ! {
-    {
-        use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 0x6500;
-        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
-    }
-
+    unsafe { init_heap(); }
 
     let nfc_buffer: [u16; 3*BUF_THIRD] = [1; 3*BUF_THIRD];
 
@@ -142,13 +140,6 @@ fn main() -> ! {
             core_periph.NVIC.set_priority(Interrupt::LDMA, 3);
             NVIC::unmask(Interrupt::LDMA);
         }
-
-        NVIC::unpend(Interrupt::GPIO_EVEN);
-        NVIC::mask(Interrupt::GPIO_EVEN);
-        unsafe {
-            core_periph.NVIC.set_priority(Interrupt::GPIO_EVEN, 4);
-            NVIC::unmask(Interrupt::GPIO_EVEN);
-        }
     });
 
     //let pair_derived = Keypair::from_bytes(ALICE_KAMPELA_KEY).unwrap();
@@ -171,6 +162,15 @@ fn main() -> ! {
     //         //.hard_derive_mini_secret_key(Some(ChainCode(*junction.inner())), b"")
     //         .0
     //         .expand_to_keypair(ExpansionMode::Ed25519);
+
+    // initialize SYST for Timer
+    free(|cs| {  
+        let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
+        core_periph.SYST.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
+        core_periph.SYST.set_reload(SYST::get_ticks_per_10ms());
+        core_periph.SYST.clear_current();
+        core_periph.SYST.enable_counter();
+    });
 
     let mut main_state = MainState::new(&nfc_buffer);
     loop {
@@ -195,6 +195,7 @@ struct MainState<'a> {
     threads: Threads<MainStatus<'a>, 3>,
     adc: ADC,
     ui: Option<Box<UI>>,
+    touches: Touches,
 }
 
 impl<'a> AsyncOperation for MainState<'a> {
@@ -205,15 +206,8 @@ impl<'a> AsyncOperation for MainState<'a> {
     fn new(nfc_buffer: Self::Init) -> Self {
         let ui = UI::new(());
         let receiver = NfcReceiver::new(nfc_buffer);
+        clear_touch_if();
         
-        // initialize SYST for Timer
-        free(|cs| {  
-            let mut core_periph = CORE_PERIPHERALS.borrow(cs).borrow_mut();
-            core_periph.SYST.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
-            core_periph.SYST.set_reload(SYST::get_ticks_per_10ms());
-            core_periph.SYST.clear_current();
-            core_periph.SYST.enable_counter();
-        });
         return Self {
             threads: Threads::from([
                 MainStatus::ADCProbe,
@@ -221,6 +215,7 @@ impl<'a> AsyncOperation for MainState<'a> {
             ]),
             adc: ADC::new(()),
             ui: Some(Box::new(ui)),
+            touches: Touches::new()
         }
     }
 
@@ -301,7 +296,7 @@ impl<'a> AsyncOperation for MainState<'a> {
                         *state = Some(UIOperationThreads::new());
                     }
                     Some(t) => {
-                        if ui.advance((self.adc.read(), t)) == Some(false) {
+                        if ui.advance((self.adc.read(), &mut self.touches, t)) == Some(false) {
                             self.threads.hold();
                         }
                     }
@@ -310,14 +305,14 @@ impl<'a> AsyncOperation for MainState<'a> {
             MainStatus::TouchRead(state) => {
                 match state {
                     None => {
-                        if get_touch_status() {
+                        if is_touch_int() {
                             self.threads.change(MainStatus::TouchRead(Some(Read::new(()))));
                         }
                     },
                     Some(reader) => {
                         match reader.advance(()) {
                             Ok(Some(Some(touch))) => {
-                                try_push_touch_data(touch);
+                                self.touches.try_push_touch_data(touch);
                                 self.threads.change(MainStatus::TouchRead(None));
                             },
                             Ok(Some(None)) => {self.threads.hold()},

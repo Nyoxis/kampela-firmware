@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::{boxed::Box, string::String};
 use efm32pg23_fix::Peripherals;
 use cortex_m::asm::delay;
 
@@ -41,9 +41,9 @@ pub fn burning_tank(peripherals: &mut Peripherals, text: String) {
 
 /// see this <https://github.com/embedded-graphics/embedded-graphics/issues/716>
 fn make_text(peripherals: &mut Peripherals, text: &str) {
-    let mut buffer = FrameBuffer::new_white();
+    let mut buffer = Box::new(FrameBuffer::new_white());
     let to_print = TextToPrint{line: text};
-    to_print.draw(&mut buffer).unwrap();
+    to_print.draw(buffer.as_mut()).unwrap();
     buffer.apply(peripherals);
 }
 

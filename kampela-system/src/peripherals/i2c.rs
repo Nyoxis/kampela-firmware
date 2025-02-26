@@ -31,11 +31,11 @@ pub fn init_i2c(peripherals: &mut Peripherals) {
     peripherals
         .gpio_s
         .i2c0_sdaroute()
-        .write(|w_reg| unsafe { w_reg.port().bits(0).pin().bits(SDA_PIN) });
+        .write(|w_reg| unsafe { w_reg.port().bits(PORT_A).pin().bits(SDA_PIN) });
     peripherals
         .gpio_s
         .i2c0_sclroute()
-        .write(|w_reg| unsafe { w_reg.port().bits(0).pin().bits(SCL_PIN) });
+        .write(|w_reg| unsafe { w_reg.port().bits(PORT_A).pin().bits(SCL_PIN) });
     
     peripherals
         .i2c0_s

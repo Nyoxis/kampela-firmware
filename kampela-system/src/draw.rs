@@ -15,12 +15,10 @@ use kampela_display_common::display_def::*;
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 
 use crate::{
-    devices::{
-        display::{
-            Bounds, Request, UpdateFast, UpdateFull, UpdateUltraFast
-        },
-        touch::{disable_touch_int, enable_touch_int}
-    }, parallel::{AsyncOperation, Threads}
+    devices::{display::{
+        Bounds, Request, UpdateFast, UpdateFull, UpdateUltraFast
+    }, touch::{disable_touch_int, enable_touch_int}},
+    parallel::{AsyncOperation, Threads}
 };
 use kampela_ui::uistate::UpdateRequest;
 use crate::debug_display::epaper_draw_stuff_differently;
@@ -134,27 +132,46 @@ impl DisplayOperationThreads {
     }
 
     /// Start part display update sequence with white draw
-    pub fn request(&mut self, request: UpdateRequest) {
-        match request {
-            UpdateRequest::Slow => {
-                self.change(DisplayState::FullOperating(None));
-                disable_touch_int();
-            },
-            UpdateRequest::Fast => {
-                self.change(DisplayState::FastOperating(None));
-            },
-            UpdateRequest::UltraFast => {
-                self.change(DisplayState::UltraFastOperating((None, None, false)));
-            },
-            UpdateRequest::UltraFastSelective => {
-                self.change(DisplayState::UltraFastOperating((None, None, true)));
-            },
-            UpdateRequest::Part(r) => {
-                let part_options = Some(refreshable_area_address(r));
-                self.change(DisplayState::UltraFastOperating((None, part_options, true)));
-            },
-            _ => {}
+    pub fn request(&mut self, voltage: i32) -> Option<bool> {
+        if let Some(u) = &self.next {
+            match u {
+                UpdateRequest::Slow => {
+                    if voltage > FULL_REFRESH_POWER {
+                        self.change(DisplayState::FullOperating(None));
+                        disable_touch_int();
+                        return Some(false)
+                    }
+                },
+                UpdateRequest::Fast => {
+                    if voltage > FAST_REFRESH_POWER {
+                        self.change(DisplayState::FastOperating(None));
+                        return Some(false)
+                    }
+                },
+                UpdateRequest::UltraFast => {
+                    if voltage > PART_REFRESH_POWER {
+                        self.change(DisplayState::UltraFastOperating((None, None, false)));
+                        return Some(false)
+                    }
+                },
+                UpdateRequest::UltraFastSelective => {
+                    if voltage > PART_REFRESH_POWER {
+                        self.change(DisplayState::UltraFastOperating((None, None, true)));
+                        return Some(false)
+                    }
+                },
+                UpdateRequest::Part(r) => {
+                    if voltage > PART_REFRESH_POWER {
+                        let part_options = Some(refreshable_area_address(*r));
+                        self.change(DisplayState::UltraFastOperating((None, part_options, true)));
+                        return Some(false)
+                    }
+                },
+                _ => {}
+            }
+            return None
         }
+        Some(true)
     }
 }
 
@@ -162,7 +179,7 @@ impl FrameBuffer {
     /// Create new virtual display and fill it with ON pixels
     pub fn new_white() -> Self {
         Self {
-            data: bitarr!(u8, Msb0; SCREEN_BIT_DEPTH; SCREEN_RESOLUTION as usize),
+            data: bitarr!(u8, Msb0; 1; SCREEN_RESOLUTION as usize),
         }
     }
 
@@ -188,13 +205,11 @@ pub enum DisplayState {
     /// Part update was requested; waiting for power
     UltraFastOperating((Option<Request<UpdateUltraFast>>, Option<Bounds>, bool)),
     /// Display not available due to update cycle
-    Aftermath,
-
-    Error,
+    End,
 }
 
 impl Default for DisplayState {
-    fn default() -> Self { DisplayState::Error }
+    fn default() -> Self { DisplayState::IdleOrPending }
 }
 
 impl AsyncOperation for FrameBuffer {
@@ -210,92 +225,80 @@ impl AsyncOperation for FrameBuffer {
     fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
         match threads.turn() {
             DisplayState::IdleOrPending => {
-                if let Some(r) = threads.next.take() {
-                    threads.request(r);
-                    return Some(false)
+                let r = threads.request(voltage);
+                if r == Some(false) {
+                    threads.next = None;
                 }
-                Some(true)
+                return r
             },
             DisplayState::FullOperating(state) => {
                 match state {
                     None => {
-                        if voltage > FULL_REFRESH_POWER {
-                            threads.change(DisplayState::FullOperating(Some(Request::<UpdateFull>::new((None, None)))));
-                            threads.last_black =true;
-                            threads.selective_counter = 0;
-                        }
-                        None
+                        threads.change(DisplayState::FullOperating(Some(Request::<UpdateFull>::new((None, None)))));
+                        threads.last_black =true;
+                        threads.selective_counter = 0;
+                        Some(false)
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
                         if r == Some(true) {
-                            threads.change(DisplayState::Aftermath);
-                            Some(false)
-                        } else {
-                            r
+                            threads.change(DisplayState::End);
+                            return Some(false)
                         }
+                        r
                     }
                 }
             },
             DisplayState::FastOperating(state) => {
                 match state {
                     None => {
-                        if voltage > FAST_REFRESH_POWER {
-                            threads.change(DisplayState::FastOperating(Some(Request::<UpdateFast>::new((None, None)))));
-                            threads.last_black =true;
-                            threads.selective_counter = 0;
-                        }
-                        None
+                        threads.change(DisplayState::FastOperating(Some(Request::<UpdateFast>::new((None, None)))));
+                        threads.last_black =true;
+                        threads.selective_counter = 0;
+                        Some(false)
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
                         if r == Some(true) {
-                            threads.change(DisplayState::Aftermath);
-                            Some(false)
-                        } else {
-                            r
+                            threads.change(DisplayState::End);
+                            return Some(false)
                         }
+                        r
                     }
                 }
             },
             DisplayState::UltraFastOperating((state, part_options, selective_refresh)) => {
                 match state {
                     None => {
-                        if voltage > PART_REFRESH_POWER {
-                            let p = part_options.take();
-                            let selective = selective_refresh.to_owned();
-                            let r = if selective && threads.selective_counter < SEQUENCIAL_SELECTIVE_LIMIT {
-                                threads.selective_counter += 1;
-                                threads.last_black = !threads.last_black;
-                                Some(!threads.last_black)
-                            } else {
-                                threads.selective_counter = 0;
-                                threads.last_black = true;
-                                None
-                            };
-                            threads.change(DisplayState::UltraFastOperating((Some(Request::<UpdateUltraFast>::new((p, r))), None, false)));
-                        }
-                        None
+                        let p = part_options.take();
+                        let selective = selective_refresh.to_owned();
+                        let r = if selective && threads.selective_counter < SEQUENCIAL_SELECTIVE_LIMIT {
+                            threads.selective_counter += 1;
+                            threads.last_black = !threads.last_black;
+                            Some(!threads.last_black)
+                        } else {
+                            threads.selective_counter = 0;
+                            threads.last_black = true;
+                            None
+                        };
+                        threads.change(DisplayState::UltraFastOperating((Some(Request::<UpdateUltraFast>::new((p, r))), None, false)));
+                        Some(false)
                     },
                     Some(a) => {
                         let r = a.advance(&self.data.data);
                         if r == Some(true) {
-                            threads.change(DisplayState::Aftermath);
-                            Some(false)
-                        } else {
-                            r
+                            threads.change(DisplayState::End);
+                            return Some(false)
                         }
+                        r
                     }
                 }
             },
-            DisplayState::Aftermath => {
+            DisplayState::End => {
                 enable_touch_int();
                 threads.change(DisplayState::IdleOrPending);
-                Some(true)
+                Some(false)
             },
-            DisplayState::Error => {
-                panic!("Unknown DisplayState")
-            }
         }
     }
 }

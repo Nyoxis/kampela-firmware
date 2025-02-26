@@ -18,7 +18,7 @@ fn init_timer0(peripherals: &mut Peripherals) {
         .timer0_cc0route()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(0)
+                .port().bits(PORT_A)
                 .pin().bits(NFC_PIN)
     });
 

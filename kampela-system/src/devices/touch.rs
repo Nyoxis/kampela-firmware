@@ -5,7 +5,7 @@ use efm32pg23_fix::Peripherals;
 use cortex_m::asm::delay;
 
 use crate::peripherals::i2c::{acknowledge_i2c_tx, acknowledge_i2c_tx_free, check_i2c_errors, check_i2c_errors_free, I2CError, mstop_i2c_wait_and_clear, mstop_i2c_wait_and_clear_free, ReadI2C};
-use crate::peripherals::gpio_pins::{enable_touch_int_flag, disable_touch_int_flag, touch_res_clear};
+use crate::peripherals::gpio_pins::{disable_touch_int_flag, enable_touch_int_flag, touch_res_clear};
 use crate::parallel::{AsyncOperation, Timer, DELAY, Threads, WithDelay};
 use crate::{in_free, if_in_free};
 
@@ -252,6 +252,25 @@ pub fn ft6336_read_at<const LEN: usize>(peripherals: &mut Peripherals, position:
     Ok(rx_data_collected.try_into().expect("constant size, always fit"))
 }
 */
+pub fn clear_touch_if() {
+    in_free(|peripherals| {
+        peripherals
+            .gpio_s
+            .if_clr()
+            .write(|w_reg| w_reg.extif0().set_bit());
+    })
+}
+
+pub fn is_touch_int() -> bool {
+    if_in_free(|peripherals| {
+        peripherals
+            .gpio_s
+            .if_()
+            .read()
+            .extif0()
+            .bit_is_set()
+    }).unwrap_or(false)
+}
 
 pub fn enable_touch_int() {
     in_free(|peripherals| { //TODO: use Interupt Flag

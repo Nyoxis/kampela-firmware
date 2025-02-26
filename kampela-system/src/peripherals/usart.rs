@@ -98,7 +98,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_txroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_MOSI_PIN)
     });
     // display MISO
@@ -107,7 +107,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_rxroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_MISO_PIN)
     });
     // display SCK
@@ -116,7 +116,7 @@ pub fn init_usart(peripherals: &mut Peripherals) {
         .usart0_clkroute()
         .write(|w_reg| unsafe {
             w_reg
-                .port().bits(2)
+                .port().bits(PORT_C)
                 .pin().bits(E_SCK_PIN)
     });
     // route enable

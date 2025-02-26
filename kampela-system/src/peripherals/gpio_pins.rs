@@ -5,7 +5,7 @@
 use cortex_m::asm::delay;
 use efm32pg23_fix::GpioS;
 
-// PA
+pub const PORT_A: u8 = 0;
 
 pub const MCU_OK: u8 = 3;
 pub const SCL_PIN: u8 = 4;
@@ -15,12 +15,13 @@ pub const TOUCH_RES_PIN: u8 = 7;
 pub const NFC_PIN: u8 = 8;
 pub const POW_PIN: u8 = 9;
 
-// PB
+pub const PORT_B: u8 = 1;
 
 pub const TOUCH_INT_PIN: u8 = 1;
 pub const SPI_BUSY_PIN: u8 = 4;
 
-// PC
+pub const PORT_C: u8 = 2;
+
 pub const FLASH_CS_PIN: u8 = 0;
 pub const E_MISO_PIN: u8 = 1;
 pub const E_MOSI_PIN: u8 = 2;
@@ -30,7 +31,8 @@ pub const PSRAM_MISO_PIN: u8 = 5;
 pub const PSRAM_MOSI_PIN: u8 = 6;
 pub const PSRAM_SCK_PIN: u8 = 7;
 
-// PD
+pub const PORT_D: u8 = 3;
+
 pub const DISP_CS_PIN: u8 = 2;
 pub const DISP_DC_PIN: u8 = 3;
 
@@ -271,7 +273,7 @@ fn map_gpio(gpio: &mut GpioS) {
         .portb_dout()
         .write(|w_reg| unsafe {
             w_reg
-                .dout().bits(1 << 1) //pull-up display sensor pin
+                .dout().bits(1 << TOUCH_INT_PIN) //pull-up display sensor pin
         });
     gpio
         .portc_model()
@@ -320,6 +322,9 @@ fn set_gpio_pins(gpio: &mut GpioS) {
 
 /// Set up external interrupt pins (used to get touch events from touch pad)
 pub fn enable_touch_int_flag(gpio: &mut GpioS) {
+    gpio
+        .if_clr()
+        .write(|w_reg| w_reg.extif0().set_bit());
     gpio
         .extipsell()
         .write(|w_reg| w_reg.extipsel0().portb());

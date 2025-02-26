@@ -13,7 +13,7 @@ use kampela_system::{
     flash_mnemonic::FlashWordList,
     parallel::{AsyncOperation, Threads}
 };
-use crate::{nfc::NfcTransactionPsramAccess, touch::get_touch_point};
+use crate::{nfc::NfcTransactionPsramAccess, touch::Touches};
 use kampela_ui::{
     platform::{PinCode, Platform},
     uistate::{UIState, UpdateRequest, UpdateRequestMutate}
@@ -44,32 +44,32 @@ impl core::ops::DerefMut for UIOperationThreads {
 
 impl UIOperationThreads {
     pub fn new() -> Self {
-        Self(Threads::new(UIStatus::DisplayOperation))
+        Self(Threads::new(UIStatus::Listen))
     }
 }
 
 impl UI {
-    fn listen(&mut self, threads: &mut UIOperationThreads) -> Option<bool> {
-        if let Some(point) = get_touch_point() {
-            self.update_request.propagate(self.state.handle_tap(point, &mut ()));
-        }
+    fn listen(&mut self, threads: &mut UIOperationThreads, touches: &mut Touches) -> Option<bool> {
         // update ui if needed
-        if let Some(u) = self.update_request.take() {
+        if let Some(u) = &self.update_request {
             let is_clear_update = matches!(u, UpdateRequest::Slow) || matches!(u, UpdateRequest::Fast);
-            self.update_request.propagate(self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented"));
-
             if !matches!(u, UpdateRequest::Hidden) {
-                if threads.is_all_running(&[|s| {
-                    matches!(s, UIStatus::DisplayOperation)
-                }]) {
-                    self.display_threads.try_add_next(u.clone());
-                };
-                threads.sync();
+                if self.display_threads.try_add_next(u.clone()) {
+                    if !threads.is_other_running() {
+                        threads.wind(UIStatus::DisplayOperation);
+                    }
+                    threads.sync();
+                } else {
+                    return None
+                }
             }
-            None
+            self.update_request = self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented");
         } else {
-            Some(true) // done operations
+            if let Some(point) = touches.take_touch_point() {
+                self.update_request.propagate(self.state.handle_tap(point, &mut ()));
+            }
         }
+        None
     }
 
     pub fn handle_message(&mut self, message: String) {
@@ -92,7 +92,7 @@ impl UI {
 
 impl AsyncOperation for UI {
     type Init = ();
-    type Input<'a> = (i32, &'a mut UIOperationThreads);
+    type Input<'a> = (i32, &'a mut Touches, &'a mut UIOperationThreads);
     type Output = Option<bool>;
     
     /// Start of UI.
@@ -109,10 +109,10 @@ impl AsyncOperation for UI {
         }
     }
     /// Call in event loop to progress through UI state
-    fn advance<'a>(&mut self, (voltage, threads): Self::Input<'a>) -> Self::Output {
+    fn advance<'a>(&mut self, (voltage, touches, threads): Self::Input<'a>) -> Self::Output {
         match threads.turn() {
             UIStatus::Listen => {
-                let a = self.listen(threads);
+                let a = self.listen(threads, touches);
                 if a.unwrap_or(false) {
                     //cortex_m::asm::wfi(); // sleep waiting for tocuh irq
                 }
@@ -121,12 +121,14 @@ impl AsyncOperation for UI {
             UIStatus::DisplayOperation => {
                 let r = self.state.display.advance((voltage, &mut self.display_threads));
                 if r == Some(true) {
-                    if self.display_threads.is_pending() {
-                        return r
-                    }
                     if !threads.is_other_running() {
                         threads.wind(UIStatus::Listen)
+                    } else if self.display_threads.is_any_running() {
+                        threads.sync();
                     }
+                }
+                if r == Some(false) {
+                    threads.hold();
                 }
                 r
             },
