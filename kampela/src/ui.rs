@@ -48,6 +48,9 @@ impl UIOperationThreads {
 impl UI {
     fn listen(&mut self, threads: &mut UIOperationThreads, touches: &mut Touches) -> Option<bool> {
         // update ui if needed
+        if let Some(point) = touches.take_touch_point() {
+            self.update_request.propagate(self.state.handle_tap(point, &mut ()));
+        }
         if let Some(u) = &self.update_request {
             let is_clear_update = matches!(u, UpdateRequest::Slow) || matches!(u, UpdateRequest::Fast);
             if !matches!(u, UpdateRequest::Hidden) {
@@ -61,10 +64,6 @@ impl UI {
                 }
             }
             self.update_request = self.state.render(is_clear_update, &mut ()).expect("guaranteed to work, no errors implemented");
-        } else {
-            if let Some(point) = touches.take_touch_point() {
-                self.update_request.propagate(self.state.handle_tap(point, &mut ()));
-            }
         }
         None
     }

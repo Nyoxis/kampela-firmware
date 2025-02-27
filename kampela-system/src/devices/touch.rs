@@ -4,7 +4,7 @@
 use cortex_m::asm::delay;
 use efm32pg23_fix::Peripherals;
 
-use crate::peripherals::gpio_pins::{send_touch_int, touch_int_pin_set_input, TOUCH_INT_PIN};
+use crate::peripherals::gpio_pins::{send_touch_int, touch_int_pin_set_input};
 use crate::peripherals::i2c::{acknowledge_i2c_tx, acknowledge_i2c_tx_free, check_i2c_errors, check_i2c_errors_free, mstop_i2c_wait_and_clear, mstop_i2c_wait_and_clear_free, I2CError, ReadI2C};
 use crate::parallel::{AsyncOperation, Timer, DELAY, Threads, WithDelay};
 use crate::{if_in_free, in_free};
@@ -274,12 +274,10 @@ pub fn is_touch_int() -> bool {
 }
 
 pub fn init_touch(peripherals: &mut Peripherals) {
-    delay(6000000);
+    delay(6000000);// datasheet: 300ms after resetting
     send_touch_int(&mut peripherals.gpio_s);
     delay(2000);
     touch_int_pin_set_input(&mut peripherals.gpio_s);
-
-    delay(6000000); // datasheet: 300ms after resetting
     // abort previous operations
     if peripherals
         .i2c0_s
