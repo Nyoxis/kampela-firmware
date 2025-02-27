@@ -33,7 +33,7 @@ fn refreshable_area_address(refreshable_area: Rectangle) -> Bounds {
         (refreshable_area.top_left.y / 8) as u8
     };
 
-    let y_start_address: u16 = if refreshable_area.top_left.x < 0 {  // should it be offsetted by -1?
+    let y_start_address: u16 = if refreshable_area.top_left.x < 0 {
         (SCREEN_SIZE_X) as u16
     } else if refreshable_area.top_left.x > (SCREEN_SIZE_X - 1) as i32{
         0

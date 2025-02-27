@@ -721,7 +721,7 @@ impl AsyncOperation for PrepareDraw {
                     None => {
                         let y = match self.bounds {
                             None => (SCREEN_SIZE_X as u16 - 1).to_le_bytes(),
-                            Some(b) => b.3.to_le_bytes()
+                            Some(b) => b.2.to_le_bytes()
                         };
                         self.threads.change(PrepareDrawState::RamYAddressCounter(Some((EPDData::new(()), y))));
                     },
